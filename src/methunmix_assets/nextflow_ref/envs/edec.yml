@@ -1,0 +1,7 @@
+name: deconvolution-edec
+channels: [conda-forge, bioconda]
+dependencies:
+  - r-base
+  - r-devtools
+  - r-gplots
+  - r-rcolorbrewer

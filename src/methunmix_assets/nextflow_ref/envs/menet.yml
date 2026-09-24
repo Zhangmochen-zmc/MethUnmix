@@ -1,0 +1,15 @@
+name: deconvolution-menet
+channels: [conda-forge, bioconda]
+dependencies:
+  - python=3.9
+  - bedtools
+  - pandas
+  - numpy
+  - scipy
+  - statsmodels
+  - matplotlib-base
+  - seaborn
+  - tqdm
+  - scikit-learn
+  - optuna
+  - pyyaml

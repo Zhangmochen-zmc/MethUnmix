@@ -1,0 +1,14 @@
+data_type: wgbs
+tools: menet,celfie,metdecode
+input_mode: auto
+reference_root: /absolute/path/to/wgbs/bed/reference
+metadata: null
+genome_build: hg38
+wgbs_validation_lines: 1000
+celfeer_validation_lines: 1000
+celfeer_pat_root: null
+menet_input_root: null
+menet_metadata: null
+celfeer_input_root: null
+celfeer_metadata: null
+outdir: results_wgbs

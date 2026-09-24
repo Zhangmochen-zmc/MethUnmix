@@ -1,0 +1,19 @@
+{
+  "schema": "methunmix-compatibility-rules-v1",
+  "range_semantics": "semver_lower_inclusive_upper_exclusive",
+  "prerelease_policy": "stable_does_not_accept_prerelease_without_explicit_opt_in",
+  "unknown_optional_fields": "preserve_and_ignore",
+  "missing_required_fields": "fail_closed",
+  "unknown_major_schema": "fail_closed",
+  "module_platforms": {
+    "portable_data_modules": "noarch",
+    "noarch_allowed_module_types": ["reference", "tool-data", "build-assets"],
+    "workflow_runtime_modules": ["linux-x86_64"],
+    "module_platform_declaration_required": true,
+    "unknown_platform": "fail_closed"
+  },
+  "conda_build_number_may_change_catalog": false,
+  "catalog_change_requires": "methunmix_patch_release",
+  "cram": "out_of_scope",
+  "slurm": "out_of_scope"
+}

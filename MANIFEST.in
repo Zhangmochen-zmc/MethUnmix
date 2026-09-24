@@ -1,0 +1,13 @@
+include LICENSE NOTICE README.md CITATION.cff VERSION VERSIONING_POLICY.md COMPATIBILITY_RULES.json
+recursive-include src/methunmix_assets VERSION ASSET_BOUNDARY.txt
+recursive-include src/methunmix_assets/capabilities *.json
+recursive-include src/methunmix_assets/assets *.json
+recursive-include src/methunmix_assets/deconvolution *.nf *.config
+recursive-include src/methunmix_assets/deconvolution/array_pro *.py
+recursive-include src/methunmix_assets/deconvolution/bin *.py *.R
+recursive-include src/methunmix_assets/deconvolution/wgbs_scripts *.py *.sh uxm
+recursive-include src/methunmix_assets/nextflow_ref *.nf *.config *.py *.sh *.txt *.yml *.yaml *.json README.md
+global-exclude *.sif *.bam *.cram *.pat *.pat.gz *.bed *.bed.gz
+global-exclude .nextflow* work reports references runtimes tools
+prune src/methunmix_assets/deconvolution/wgbs_vendor
+prune src/methunmix_assets/deconvolution/vendor/prmeth_R

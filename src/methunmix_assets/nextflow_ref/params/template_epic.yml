@@ -1,0 +1,7 @@
+data_type: epic
+tools: all
+input_mode: auto
+reference_root: /absolute/path/to/epic/reference
+metadata: null
+genome_build: hg38
+outdir: results_epic

@@ -1,0 +1,3 @@
+name: deconvolution-methatlas
+channels: [conda-forge, bioconda]
+dependencies: [python=3.9, pandas, numpy]

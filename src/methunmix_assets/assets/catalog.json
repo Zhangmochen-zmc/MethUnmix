@@ -1,0 +1,27 @@
+{
+  "schema": "methunmix-static-catalog-v1",
+  "product": "MethUnmix",
+  "core_version": "2.0.0rc1",
+  "catalog_release": "2.0.0rc1-static.1",
+  "catalog_sequence": 1,
+  "trust_model": "HTTPS_STATIC_CATALOG_SHA256",
+  "metadata_signatures": "NOT_USED_TUF_DEFERRED",
+  "publication_policy": {
+    "catalog_url": "Versioned immutable URL whose path contains catalog_release",
+    "asset_url": "HTTPS content-addressed immutable object URL whose path contains SHA256",
+    "object_overwrite": "forbidden"
+  },
+  "empty_catalog_policy": {
+    "allowed": true,
+    "fallback": "USER_SUPPLIED_SUPPORTED_OR_BLOCKED",
+    "reason": "No external asset is currently approved for public redistribution; users may import compatible offline modules they are authorized to use. BLOCKED assets remain unavailable."
+  },
+  "network_policy": "run_never_networks",
+  "targets": [],
+  "notes": [
+    "This first-release catalog is intentionally empty: no external asset is public until its redistribution rights are explicitly approved.",
+    "Large references, models, runtimes and containers remain separate from the Conda package.",
+    "HTTPS and SHA256 detect transport/content mismatch but are not a substitute for signed TUF metadata.",
+    "TUF, signed metadata, cryptographic freshness and production keys are deferred; no private keys are included or generated."
+  ]
+}

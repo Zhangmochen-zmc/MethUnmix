@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Deconvolution marker selection parameters",
+  "type": "object",
+  "required": ["data_type", "tools", "outdir"],
+  "properties": {
+    "data_type": {"type": "string", "enum": ["450k", "epic", "wgbs"]},
+    "tools": {"type": "string", "minLength": 1},
+    "reference_root": {"type": ["string", "null"]},
+    "metadata": {"type": ["string", "null"]},
+    "input_mode": {"type": "string", "enum": ["auto", "raw", "preconverted"], "default": "auto"},
+    "menet_input_root": {"type": ["string", "null"]},
+    "menet_metadata": {"type": ["string", "null"]},
+    "celfeer_input_root": {"type": ["string", "null"]},
+    "celfeer_metadata": {"type": ["string", "null"]},
+    "wgbs_validation_lines": {"type": "integer", "minimum": 1, "default": 1000},
+    "celfeer_validation_lines": {"type": "integer", "minimum": 1, "default": 1000},
+    "menet_workers": {"type": "integer", "minimum": 1, "default": 12},
+    "menet_check_sorted": {"type": "boolean", "default": true},
+    "celfeer_workers": {"type": "integer", "minimum": 1, "default": 12},
+    "celfeer_bin_workers": {"type": "integer", "minimum": 1, "default": 4},
+    "genome_build": {"type": ["string", "null"], "enum": ["hg19", "hg38", null]},
+    "celfeer_pat_root": {"type": ["string", "null"]},
+    "uxm_pat_root": {"type": ["string", "null"]},
+    "methylbert_reads_root": {"type": ["string", "null"]},
+    "methylbert_pretrain": {"type": ["string", "null"]},
+    "scenario_id": {"type": ["string", "null"]},
+    "wgbs_to_850k_script": {"type": ["string", "null"]},
+    "outdir": {"type": "string", "minLength": 1},
+    "seed": {"const": 123}
+  },
+  "additionalProperties": true
+}

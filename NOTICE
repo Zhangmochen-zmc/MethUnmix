@@ -1,0 +1,17 @@
+MethUnmix
+
+Copyright 2026 MethUnmix contributors.
+
+This notice applies to MethUnmix-authored material only. Third-party algorithm
+implementations (CelFiE, CelFEER, MetDecode, PRMeth and UXM) are intentionally
+not bundled in the core source, wheel or Conda payload. They must be supplied
+as separately licensed external runtime modules described by
+`methunmix-external-runtime.json`; the core package never downloads, clones or
+redistributes them. Their individual license and research-use terms remain the
+responsibility of the runtime provider and must be disclosed in that manifest.
+
+Third-party runtimes, containers, references, models, genome caches and
+user-provided sequencing data are not included in this core package. Their
+copyright and license terms remain separate. No external asset license is
+implied by this notice. A missing or incomplete external-runtime contract is
+reported before Nextflow starts.

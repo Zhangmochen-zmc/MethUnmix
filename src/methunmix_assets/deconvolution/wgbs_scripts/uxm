@@ -1,0 +1,10 @@
+#!/bin/bash
+# 1. 获取这个包装器脚本所在的 bin 目录路径
+BIN_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# 2. 定义真正的 uxm 路径 (在 software 文件夹里)
+REAL_UXM="${BIN_DIR}/../software/UXM_deconv/uxm"
+
+# 3. 调用 python3 执行真程序，并将所有参数 ($@) 传给它
+# 运行真程序时，Python 会自动把 software/UXM_deconv 加入搜索路径
+python3 "$REAL_UXM" "$@"

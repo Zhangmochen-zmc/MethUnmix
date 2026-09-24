@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use MethUnmix, please cite the software and the underlying deconvolution tools you run."
+title: "MethUnmix: DNA methylation deconvolution workflow"
+version: "2.0.0rc1"
+date-released: "2026-09-13"
+authors:
+  - name: "MethUnmix contributors"
+license: "MIT"
+repository-code: "https://github.com/zhangmch/MethUnmix"
+keywords:
+  - DNA methylation
+  - deconvolution
+  - Nextflow
+  - WGBS
+  - Illumina 450K
+  - Illumina EPIC
+references:
+  - type: software
+    title: "MethUnmix (formerly DeMethFlow)"
+    url: "https://github.com/zhangmch/MethUnmix"

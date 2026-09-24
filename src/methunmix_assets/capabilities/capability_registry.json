@@ -1,0 +1,149 @@
+{
+  "schema": "methunmix-capability-registry-v2",
+  "product": "MethUnmix",
+  "software_version": "2.0.0rc1",
+  "package_platform_support": ["noarch"],
+  "workflow_execution_platform_support": ["linux-64"],
+  "asset_architecture": "linux-64",
+  "container_architecture": "x86_64",
+  "genome_builds": ["hg19", "hg38"],
+  "scenarios": ["immune6", "immune12", "fetal19", "epithelial", "breast", "brain"],
+  "platforms": ["450k", "epic", "wgbs"],
+  "logical_tools": [
+    "Houseman", "EDec", "EpiDISH-RPC", "EpiDISH-CP", "EpiDISH-CBS",
+    "EpiSCORE", "Tsisal", "EMeth-normal", "EMeth-laplace", "CelFiE",
+    "MethAtlas", "CelFEER", "UXM", "RefFreeEWAS", "MeDeCom",
+    "MethylCIBERSORT", "ARIC", "PRMeth", "MetDecode", "MEnet", "MethylBERT"
+  ],
+  "manifest_tool_aliases": {
+    "EpiDISH": ["EpiDISH-RPC", "EpiDISH-CP", "EpiDISH-CBS"],
+    "EMeth": ["EMeth-normal", "EMeth-laplace"],
+    "PRmeth": ["PRMeth"]
+  },
+  "gpu_tools": ["MEnet", "MethylBERT"],
+  "routes": [
+    {
+      "route_id": "array-native-450k",
+      "route_family": "array-native",
+      "input_platform": "450k",
+      "target_platform": "450k",
+      "source_platform": "450k",
+      "analysis_contract": "array_450k_cpg",
+      "scenarios": ["immune6", "immune12", "fetal19", "epithelial", "breast", "brain"],
+      "genome_builds": ["not_applicable"],
+      "input_types_by_tool": {"default": ["array_matrix"]},
+      "manifest_tools": ["ARIC", "EDec", "EMeth", "EpiDISH", "EpiSCORE", "Houseman", "MEnet", "MeDeCom", "MethAtlas", "MethylCIBERSORT", "PRmeth", "RefFreeEWAS", "Tsisal"]
+    },
+    {
+      "route_id": "array-native-epic",
+      "route_family": "array-native",
+      "input_platform": "epic",
+      "target_platform": "epic",
+      "source_platform": "epic",
+      "analysis_contract": "array_epic_cpg",
+      "scenarios": ["immune6", "immune12", "brain"],
+      "genome_builds": ["not_applicable"],
+      "input_types_by_tool": {"default": ["array_matrix"]},
+      "manifest_tools": ["ARIC", "EDec", "EMeth", "EpiDISH", "EpiSCORE", "Houseman", "MEnet", "MeDeCom", "MethAtlas", "MethylCIBERSORT", "PRmeth", "RefFreeEWAS", "Tsisal"]
+    },
+    {
+      "route_id": "epic-to-450k-common-cpg",
+      "route_family": "epic-to-450k",
+      "input_platform": "epic",
+      "target_platform": "450k",
+      "source_platform": "450k",
+      "analysis_contract": "array_epic_from_450k_common_cpg_v1",
+      "scenarios": ["fetal19", "epithelial", "breast"],
+      "genome_builds": ["not_applicable"],
+      "input_types_by_tool": {"default": ["array_matrix"]},
+      "requires_explicit_opt_in": true,
+      "manifest_tools": ["ARIC", "EDec", "EMeth", "EpiDISH", "EpiSCORE", "Houseman", "MEnet", "MeDeCom", "MethAtlas", "MethylCIBERSORT", "PRmeth", "RefFreeEWAS", "Tsisal"]
+    },
+    {
+      "route_id": "wgbs-to-epic-cpg-projection",
+      "route_family": "wgbs-to-epic",
+      "input_platform": "wgbs",
+      "target_platform": "epic",
+      "source_platform": "epic",
+      "analysis_contract": "wgbs_derived_epic_cpg_v1",
+      "scenarios": ["immune6", "immune12", "brain"],
+      "genome_builds": ["hg19", "hg38"],
+      "input_types_by_tool": {"default": ["bed", "bam"]},
+      "requires_explicit_opt_in": true,
+      "manifest_tools": ["ARIC", "EDec", "EMeth", "EpiDISH", "EpiSCORE", "Houseman", "MEnet", "MeDeCom", "MethAtlas", "MethylCIBERSORT", "PRmeth", "RefFreeEWAS", "Tsisal"]
+    },
+    {
+      "route_id": "wgbs-to-450k-cpg-projection",
+      "route_family": "wgbs-to-450k",
+      "input_platform": "wgbs",
+      "target_platform": "450k",
+      "source_platform": "450k",
+      "analysis_contract": "wgbs_derived_450k_cpg_v1",
+      "scenarios": ["fetal19", "epithelial", "breast"],
+      "genome_builds": ["hg19", "hg38"],
+      "input_types_by_tool": {"default": ["bed", "bam"]},
+      "requires_explicit_opt_in": true,
+      "manifest_tools": ["ARIC", "EDec", "EMeth", "EpiDISH", "EpiSCORE", "Houseman", "MEnet", "MeDeCom", "MethAtlas", "MethylCIBERSORT", "PRmeth", "RefFreeEWAS", "Tsisal"]
+    },
+    {
+      "route_id": "wgbs-native-hg19",
+      "route_family": "wgbs-native",
+      "input_platform": "wgbs",
+      "target_platform": "wgbs",
+      "source_platform": "wgbs",
+      "analysis_contract": "wgbs_native_hg19",
+      "scenarios": ["immune6", "epithelial", "breast"],
+      "genome_builds": ["hg19"],
+      "input_types_by_tool": {
+        "CelFiE": ["bed", "bam"],
+        "CelFEER": ["pat", "bam"],
+        "UXM": ["pat", "bam"],
+        "MetDecode": ["bed", "bam"],
+        "MEnet": ["bed", "bam"],
+        "MethylBERT": ["pat", "bam"]
+      },
+      "manifest_tools": ["ARIC", "CelFEER", "CelFiE", "EDec", "EMeth", "EpiDISH", "EpiSCORE", "Houseman", "MEnet", "MeDeCom", "MetDecode", "MethAtlas", "MethylBERT", "MethylCIBERSORT", "PRmeth", "RefFreeEWAS", "Tsisal", "UXM"]
+    },
+    {
+      "route_id": "wgbs-native-hg38",
+      "route_family": "wgbs-native",
+      "input_platform": "wgbs",
+      "target_platform": "wgbs",
+      "source_platform": "wgbs",
+      "analysis_contract": "wgbs_native_hg38",
+      "scenarios": ["immune6", "epithelial", "breast"],
+      "genome_builds": ["hg38"],
+      "input_types_by_tool": {
+        "CelFiE": ["bed", "bam"],
+        "CelFEER": ["pat", "bam"],
+        "UXM": ["pat", "bam"],
+        "MetDecode": ["bed", "bam"],
+        "MEnet": ["bed", "bam"],
+        "MethylBERT": ["pat", "bam"]
+      },
+      "manifest_tools": ["ARIC", "CelFEER", "CelFiE", "EDec", "EMeth", "EpiSCORE", "Houseman", "MEnet", "MeDeCom", "MetDecode", "MethylBERT", "MethylCIBERSORT", "UXM"]
+    }
+  ],
+  "legacy_contracts": [
+    {
+      "source_platform": "wgbs",
+      "analysis_contract": "array_epic_cpg",
+      "route_id": "legacy-wgbs-epic-unresolved",
+      "release_status": "QUARANTINED",
+      "reason_code": "LEGACY_ROUTE_UNRESOLVED",
+      "reason": "Legacy WGBS-sourced EPIC-contract references lack an explicit genome-build/projection contract; they must not be counted as native EPIC or as the separately registered WGBS-derived projection route."
+    }
+  ],
+  "declared_invalid_reason_codes": [
+    "REFERENCE_NOT_AVAILABLE", "ROUTE_NOT_REGISTERED", "INPUT_NOT_SUPPORTED",
+    "DEVICE_NOT_SUPPORTED", "DEVICE_PROFILE_UNVALIDATED", "QUARANTINED",
+    "NOT_AVAILABLE", "NOT_ADAPTED", "EXPLICIT_ONLY", "LEGACY_ROUTE_UNRESOLVED",
+    "CRAM_OUT_OF_SCOPE", "SLURM_OUT_OF_SCOPE", "MINIMUM_SAMPLE_COUNT_NOT_MET",
+    "CONDA_COMPATIBILITY_PENDING", "DISTRIBUTION_BLOCKED"
+  ],
+  "status_dimensions": [
+    "scientific_status", "distribution_status", "execution_policy",
+    "conda_compatibility_status", "cpu_conda_status", "gpu_conda_status"
+  ],
+  "scope_note": "This registry defines deconvolution input routes. Reference-construction capabilities are a separate operation and must not be inferred from these deconvolution rows."
+}

@@ -1,0 +1,3 @@
+name: deconvolution-tsisal
+channels: [conda-forge, bioconda]
+dependencies: [r-base, r-dplyr, r-tibble, bioconductor-limma]

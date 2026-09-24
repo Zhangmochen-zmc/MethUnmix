@@ -1,0 +1,7 @@
+data_type: 450k
+tools: all
+input_mode: auto
+reference_root: /absolute/path/to/450k/reference
+metadata: null
+genome_build: hg38
+outdir: results_450k

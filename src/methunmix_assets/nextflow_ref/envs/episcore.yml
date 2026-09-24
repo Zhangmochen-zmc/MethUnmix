@@ -1,0 +1,3 @@
+name: deconvolution-episcore
+channels: [conda-forge, bioconda]
+dependencies: [r-base, bioconductor-episcore]

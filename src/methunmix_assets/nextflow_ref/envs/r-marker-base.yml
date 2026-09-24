@@ -1,0 +1,10 @@
+name: deconvolution-r-marker-base
+channels: [conda-forge, bioconda]
+dependencies:
+  - r-base
+  - r-devtools
+  - r-dplyr
+  - r-tibble
+  - r-gplots
+  - r-rcolorbrewer
+  - bioconductor-limma
