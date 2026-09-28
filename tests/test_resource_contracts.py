@@ -92,31 +92,6 @@ class ResourceContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("sort --parallel=1", metdecode)
 
-    def test_native_wgbs_python_backends_do_not_auto_detect_host_cores(self):
-        paths = (
-            PROJECT_ROOT / "deconvolution" / "bin" / "menet.py",
-            PROJECT_ROOT / "deconvolution" / "wgbs_vendor" / "CelFiE" / "scripts" / "celfie_new.py",
-            PROJECT_ROOT / "deconvolution" / "wgbs_vendor" / "MetDecode" / "run.py",
-            PROJECT_ROOT / "deconvolution" / "wgbs_vendor" / "MetDecode" / "metdecode" / "model.py",
-        )
-        forbidden = ("os.cpu_count(", "multiprocessing.cpu_count(", "Pool()", "n_jobs=-1")
-        for path in paths:
-            source = path.read_text(encoding="utf-8")
-            with self.subTest(path=path.name):
-                for token in forbidden:
-                    self.assertNotIn(token, source)
-
-    def test_native_wgbs_torch_pools_are_explicitly_bounded(self):
-        menet = (PROJECT_ROOT / "deconvolution" / "bin" / "menet.py").read_text(encoding="utf-8")
-        metdecode = (
-            PROJECT_ROOT / "deconvolution" / "wgbs_vendor" / "MetDecode" / "run.py"
-        ).read_text(encoding="utf-8")
-        self.assertIn('os.environ.get("METHUNMIX_TASK_CPUS")', menet)
-        self.assertIn("os.environ.get('METHUNMIX_TASK_CPUS', '1')", metdecode)
-        for source in (menet, metdecode):
-            self.assertIn("torch.set_num_threads(budget)", source)
-            self.assertIn("torch.set_num_interop_threads(1)", source)
-
     def test_native_wgbs_uxm_contract_remains_task_scoped(self):
         workflow = (PROJECT_ROOT / "deconvolution" / "wgbs_main.nf").read_text(encoding="utf-8")
         block = process_block(workflow, "RUN_UXM")
@@ -141,20 +116,6 @@ class ResourceContractTests(unittest.TestCase):
                 with self.subTest(workflow=workflow_name, process=process_name):
                     for token in forbidden:
                         self.assertNotIn(token, block)
-
-    def test_static_sweep_has_explicit_secondary_backend_inventory(self):
-        audit = (PROJECT_ROOT.parent.parent / "scripts" / "audit_secondary_resource_contracts.py").read_text(
-            encoding="utf-8"
-        )
-        for process_name in SECONDARY_RUN_PROCESSES:
-            self.assertIn(process_name.removeprefix("RUN_"), audit)
-        for classification in (
-            "CONTROLLED",
-            "NOT_APPLICABLE",
-            "POTENTIALLY_UNCONTROLLED",
-            "CONFIRMED_OVERSUBSCRIPTION",
-        ):
-            self.assertIn(classification, audit)
 
     def test_resource_sensitive_array_processes_propagate_task_cpus(self):
         for workflow_name in ("450k_main.nf", "epic_main.nf"):

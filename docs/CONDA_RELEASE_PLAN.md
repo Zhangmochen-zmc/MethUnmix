@@ -27,8 +27,9 @@ scientific status.
   core API, reference schema and runtime API.
 - [ ] Freeze every asset selector, version, SHA256, byte length, genome build,
   cell-type order, random seed, input digest, tolerance and scientific scope.
-- [ ] Store the owner-approved, digest-bound baseline in `evidence/BASELINE_FROZEN.json`; templates
-  are not evidence.
+- [ ] Store the owner-approved, digest-bound baseline in the private release
+  record; public documentation describes the policy but does not distribute
+  host-specific release evidence. Templates are not evidence.
 
 ## Gate 2 — package and compatibility
 
@@ -77,9 +78,9 @@ scientific status.
 
 - [x] Freeze the 21-tool registry and generate the valid/invalid matrix with
   stable platform-inclusive capability IDs.
-- [x] Run `scripts/audit_capability_matrix.py`; every invalid reason must fail
-  before process start and every valid row must have an explicit route family,
-  input contract, build and device policy.
+- [x] During private release qualification, audit every invalid capability
+  reason before process start and require every valid row to declare an
+  explicit route family, input contract, build and device policy.
 - [x] Each capability candidate records required reference artifacts,
   device-specific runtime/data modules, scientific/distribution/execution
   state, CPU/GPU Conda state, public reproducibility status and a stable

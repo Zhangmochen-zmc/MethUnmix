@@ -1,8 +1,8 @@
 {
   "schema": "methunmix-static-catalog-v1",
   "product": "MethUnmix",
-  "core_version": "2.0.0rc1",
-  "catalog_release": "2.0.0rc1-static.1",
+  "core_version": "2.0.0rc2",
+  "catalog_release": "2.0.0rc2-static.1",
   "catalog_sequence": 1,
   "trust_model": "HTTPS_STATIC_CATALOG_SHA256",
   "metadata_signatures": "NOT_USED_TUF_DEFERRED",

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "methunmix"
-version = "2.0.0rc1"
+version = "2.0.0rc2"
 description = "Offline DNA methylation deconvolution workflow"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"

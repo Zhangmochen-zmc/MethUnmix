@@ -20,9 +20,8 @@ The staging candidate must pass the complete RC qualification. After the
 formal tag, production metadata/assets and the final Conda package must be
 verified again. A staging pass cannot promote production automatically.
 
-The current RC status is tracked gate-by-gate in
-`evidence/release_gate_breakdown_rc.json`; the aggregate remains
-`METHUNMIX_CONDA_RC_BLOCKED`. The scientific-compatibility sub-gates are
+The current RC status is tracked gate-by-gate in the private release record;
+the aggregate remains `METHUNMIX_CONDA_RC_BLOCKED`. The scientific-compatibility sub-gates are
 independent: the baseline is frozen, local unit tests pass, seven Houseman
 routes have repeatability observations, but execution coverage is only 7/199,
 Houseman numerical acceptance is undefined, and no authoritative prior
@@ -49,8 +48,8 @@ make any blocked capability available.
 
 `SBOM_READY` requires an artifact-digest-bound CycloneDX SBOM for the exact
 source/wheel/Conda build, resolved Conda dependencies, each distributed SIF,
-and every public reference/model/cache target. The current `SBOM_CORE_RC.json`
-only describes staged source/wheel artifacts and bundled vendor code; its
+and every public reference/model/cache target. The current core-only SBOM
+candidate only describes staged source/wheel artifacts and bundled vendor code; its
 `PARTIAL_RC_CORE_ONLY` scope is not a release pass.
 
 `run` never performs network updates. Only explicit `asset audit --online`

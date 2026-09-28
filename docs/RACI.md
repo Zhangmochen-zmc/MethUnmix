@@ -2,7 +2,7 @@
 
 | Activity | Responsible | Accountable | Consulted | Evidence |
 |---|---|---|---|---|
-| Product/CLI name audit | Maintainer | Release owner | Legal/community | `evidence/name_identity_audit.json` |
+| Product/CLI name audit | Maintainer | Release owner | Legal/community | private name-review record |
 | Core package build | Maintainer | Release owner | Bioconda reviewer | wheel, source archive, recipe |
 | Static catalog and immutable object publication | Asset custodian | Release owner | Security reviewer | versioned catalog, SHA256 and URL audit |
 | License and redistribution review | Asset custodian | Legal/PI | Tool authors | license matrix, notices |

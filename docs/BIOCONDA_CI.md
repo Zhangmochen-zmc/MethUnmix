@@ -1,8 +1,8 @@
 # Bioconda channel validation
 
-The dependency-free local checks in `scripts/audit_conda_recipe.py` validate
-identity, entry points, dependency bounds, URL and source checksum. They do not
-replace the channel's build system.
+Recipe-specific static source-binding checks are maintained in the private
+release workspace. They do not replace the channel's build system and are not
+part of the public source distribution.
 
 Once `bioconda-utils` is installed in a dedicated CI environment, run from a
 clean clone:

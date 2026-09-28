@@ -27,7 +27,16 @@ INCLUDE_FILES = {
 # The Bioconda recipe is maintained by the packaging channel and deliberately
 # is not embedded in the upstream source tarball.  Including it would create a
 # self-referential SHA256 because the recipe records this archive's digest.
-INCLUDE_DIRS = {"src", "docs", "scripts", "tests"}
+INCLUDE_DIRS = {"src", "docs", "tests"}
+# Public source archives contain only the portable helpers used by the
+# self-contained regression contract.  Release-evidence generators and host
+# execution launchers remain in the private development repository.
+INCLUDE_SCRIPTS = {
+    "scripts/audit_conda_environment.py",
+    "scripts/audit_conda_payload.py",
+    "scripts/build_source_snapshot.py",
+    "scripts/normalize_wheel.py",
+}
 EXCLUDE_PARTS = {"__pycache__", ".pytest_cache", ".mypy_cache", "dist_source", "dist_conda_rc", ".git", "build"}
 # Repository-local host launchers and phase-specific evidence generators are
 # retained in Git for release operations, but are not part of the portable
@@ -112,6 +121,15 @@ def files() -> list[Path]:
                     continue
                 if tracked is None or relative_name in tracked:
                     selected.append(path)
+    for relative_name in sorted(INCLUDE_SCRIPTS):
+        path = ROOT / relative_name
+        if not path.is_file():
+            raise FileNotFoundError(f"required public script is missing: {path}")
+        if path.is_symlink():
+            raise ValueError(f"refusing symlinked public script: {path}")
+        if tracked is not None and relative_name not in tracked:
+            raise ValueError(f"required public script is not tracked in Git: {relative_name}")
+        selected.append(path)
     unique: set[Path] = set()
     for path in selected:
         if path.is_symlink():

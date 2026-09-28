@@ -11,9 +11,9 @@ import re
 from pathlib import Path, PurePosixPath
 
 try:
-    from .build_source_snapshot import EXCLUDE_PARTS, INCLUDE_DIRS, INCLUDE_FILES, files as source_allowlist_files
+    from .build_source_snapshot import EXCLUDE_PARTS, INCLUDE_DIRS, INCLUDE_FILES, INCLUDE_SCRIPTS, files as source_allowlist_files
 except ImportError:  # executing this file directly from scripts/
-    from build_source_snapshot import EXCLUDE_PARTS, INCLUDE_DIRS, INCLUDE_FILES, files as source_allowlist_files
+    from build_source_snapshot import EXCLUDE_PARTS, INCLUDE_DIRS, INCLUDE_FILES, INCLUDE_SCRIPTS, files as source_allowlist_files
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WHEEL = ROOT / "dist_conda_static_catalog_rc1_clean_helper_fix" / "methunmix-2.0.0rc1-py3-none-any.whl"
@@ -21,7 +21,7 @@ DEFAULT_SOURCE = ROOT / "dist_source_static_catalog_rc1_helper_fix" / "methunmix
 DEFAULT_RECIPE = ROOT / "bioconda" / "recipes" / "methunmix" / "meta.yaml"
 FORBIDDEN = (".sif", ".bam", ".cram", ".pat", ".bed", ".bai", ".csi", ".pyc", ".pyo", ".jar", ".class", ".so", ".dll", ".dylib")
 PRIVATE_PATH = re.compile(rb"/(?:data|home|disk1)/(?:zhangmch|yuxy|weiyk)(?:/|$)", re.IGNORECASE)
-PACKAGE_VERSION = "2.0.0rc1"
+PACKAGE_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 # RC1 size envelope is based on the measured allowlisted payload plus a fixed
 # allowance. Updating it requires reviewing the source/wheel allowlists first.
 SIZE_ALLOWANCE_BYTES = 256 * 1024
@@ -106,12 +106,14 @@ def allowed_source_member(name: str) -> bool:
         return False
     if len(relative) == 1:
         return relative[0] in INCLUDE_FILES
+    if relative[0] == "scripts":
+        return relative_text in INCLUDE_SCRIPTS
     if relative[0] not in INCLUDE_DIRS:
         return False
     suffix = PurePosixPath(name).suffix
     if relative[0] == "docs":
         return suffix == ".md"
-    if relative[0] in {"scripts", "tests"}:
+    if relative[0] == "tests":
         return suffix == ".py"
     if relative[0] == "src":
         relative_source_path = PurePosixPath(*relative).as_posix()
@@ -153,6 +155,11 @@ def main() -> int:
     parser.add_argument("--wheel", type=Path, default=DEFAULT_WHEEL)
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
     parser.add_argument("--recipe", type=Path, default=DEFAULT_RECIPE)
+    parser.add_argument(
+        "--skip-recipe-binding",
+        action="store_true",
+        help="audit a local pre-publication candidate without asserting a published recipe source binding",
+    )
     parser.add_argument("--output", type=Path, help="also write the JSON audit evidence")
     args = parser.parse_args()
     wheel = args.wheel.expanduser().resolve()
@@ -242,7 +249,12 @@ def main() -> int:
                 "archive_bytes": source.stat().st_size,
                 "archive_limit_bytes": SOURCE_ARCHIVE_BASELINE + COMPRESSED_ALLOWANCE_BYTES,
             }
-    if recipe_path.is_file():
+    if args.skip_recipe_binding:
+        evidence["recipe_binding"] = {
+            "status": "PENDING_PUBLICATION",
+            "reason": "local candidate audit intentionally does not bind a recipe to a nonexistent public release asset",
+        }
+    elif recipe_path.is_file():
         recipe = recipe_path.read_text(encoding="utf-8")
         source_digest = evidence.get("source", {}).get("sha256") if isinstance(evidence.get("source"), dict) else None
         if source_digest and source_digest not in recipe:

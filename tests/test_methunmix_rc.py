@@ -43,7 +43,7 @@ class MethUnmixControlPlaneTests(unittest.TestCase):
         self.assertNotIn("    menet.py predict", wgbs_main)
 
     def test_resource_root_and_version(self):
-        self.assertEqual(version(), "2.0.0rc1")
+        self.assertEqual(version(), "2.0.0rc2")
         self.assertTrue((PROJECT_ROOT / "deconvolution" / "wgbs_preprocess.nf").is_file())
 
     def test_methylbert_fix_process_passes_declared_output_without_placeholder(self):
@@ -111,23 +111,6 @@ class MethUnmixControlPlaneTests(unittest.TestCase):
             self.assertEqual(args[0][-1], "true")
             self.assertEqual(kwargs["timeout"], 30)
 
-    def test_core_sbom_binds_staged_artifacts_and_discloses_license_gaps(self):
-        from scripts.generate_sbom import DEFAULT_INVENTORY, DEFAULT_SOURCE, DEFAULT_WHEEL, build_sbom
-
-        bom = build_sbom(DEFAULT_SOURCE, DEFAULT_WHEEL, DEFAULT_INVENTORY)
-        self.assertEqual(bom["bomFormat"], "CycloneDX")
-        self.assertEqual(bom["specVersion"], "1.6")
-        props = {item["name"]: item["value"] for item in bom["metadata"]["component"]["properties"]}
-        self.assertEqual(props["methunmix:sourceArchiveSha256"], hashlib.sha256(DEFAULT_SOURCE.read_bytes()).hexdigest())
-        self.assertEqual(props["methunmix:wheelSha256"], hashlib.sha256(DEFAULT_WHEEL.read_bytes()).hexdigest())
-        self.assertEqual(props["methunmix:firstPartyLicense"], "MIT; does not grant bundled third-party rights")
-        self.assertNotIn("licenses", bom["metadata"]["component"])
-        self.assertEqual(props["methunmix:licenseAssessment"], "PENDING_MIXED_VENDOR_LICENSE_REVIEW")
-        vendor = {item["name"]: item for item in bom["components"] if item.get("type") == "library"}
-        self.assertIn("CelFEER", vendor)
-        self.assertTrue(any(prop["name"] == "methunmix:distributionStatus" and prop["value"] == "BLOCKED" for prop in vendor["CelFEER"]["properties"]))
-        self.assertTrue(any(item["name"] == "methunmix:sbomCompleteness" and item["value"] == "PARTIAL_RC_CORE_ONLY" for item in bom["metadata"]["properties"]))
-
     def test_catalog_is_offline_static_staging(self):
         catalog = load_catalog()
         self.assertEqual(catalog["product"], "MethUnmix")
@@ -138,115 +121,6 @@ class MethUnmixControlPlaneTests(unittest.TestCase):
         self.assertTrue(catalog["empty_catalog_policy"]["allowed"])
         self.assertEqual(catalog["empty_catalog_policy"]["fallback"], "USER_SUPPLIED_SUPPORTED_OR_BLOCKED")
 
-    def test_manifest_derived_capability_matrix_does_not_overclaim_routes(self):
-        matrix_path = PROJECT_ROOT.parent.parent / "evidence" / "capability_matrix_rc.json"
-        registry_path = PROJECT_ROOT / "capabilities" / "capability_registry.json"
-        matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
-        registry = json.loads(registry_path.read_text(encoding="utf-8"))
-        self.assertEqual(matrix["schema"], "methunmix-capability-matrix-v2")
-        self.assertEqual(len(registry["logical_tools"]), 21)
-        self.assertEqual(matrix["summary"]["logical_tool_count"], 21)
-        self.assertFalse(matrix["summary"]["unrepresented_logical_tools"])
-        self.assertTrue(matrix["source_manifest_audit"])
-        self.assertTrue(all(item["status"] == "MATCH" for item in matrix["source_manifest_audit"]))
-
-        root = PROJECT_ROOT.parent.parent
-        baseline = json.loads((root / "evidence" / "baseline_candidate_inventory.json").read_text(encoding="utf-8"))
-        self.assertEqual(baseline["tolerance_review"]["tools_without_reference_candidates"], [])
-        license_inventory = json.loads((root / "evidence" / "LICENSE_GAP_INVENTORY.json").read_text(encoding="utf-8"))
-        blocked_tool_code = [
-            item for item in license_inventory["items"]
-            if item.get("asset_id", "").startswith("tool-code:")
-            and item.get("proposed_distribution_status") == "BLOCKED"
-        ]
-        self.assertEqual(len(blocked_tool_code), 5)
-
-        candidates = matrix["technical_candidates"]
-        ids = [row["capability_id"] for row in candidates]
-        self.assertEqual(len(ids), len(set(ids)))
-        for row in candidates:
-            self.assertRegex(row["evidence_id"], r"^evidence:[0-9a-f]{20}$")
-            self.assertEqual(row["required_assets"]["reference_selector"], row["selector"])
-            self.assertEqual(row["cpu_conda_status"], "PENDING_EXTERNAL_CONDA_CI")
-            expected_gpu_state = "PENDING_GPU_CONDA_CI" if row["tool"] in registry["gpu_tools"] else "NOT_APPLICABLE"
-            self.assertEqual(row["gpu_conda_status"], expected_gpu_state)
-            self.assertTrue(row["public_reproducibility"])
-            self.assertEqual(row["distribution_approval_status"], "PENDING_OWNER_REVIEW")
-            self.assertIn(row["code_distribution_status"], {"PUBLIC_BUNDLED", "BLOCKED"})
-        prmeth = next(row for row in candidates if row["tool"] == "PRMeth")
-        self.assertEqual(prmeth["code_distribution_status"], "BLOCKED")
-
-        self.assertEqual(prmeth["public_reproducibility"], "BLOCKED_PENDING_LICENSE_OR_CAPABILITY_REVIEW")
-        methylbert_cpu = next(
-            row for row in candidates
-            if row["scenario"] == "immune6" and row["route_id"] == "wgbs-native-hg19"
-            and row["tool"] == "MethylBERT" and row["device"] == "cpu"
-        )
-        methylbert_gpu = next(
-            row for row in candidates
-            if row["scenario"] == "immune6" and row["route_id"] == "wgbs-native-hg19"
-            and row["tool"] == "MethylBERT" and row["device"] == "gpu"
-        )
-        self.assertIn("MethylBERT-cpu", methylbert_cpu["required_assets"]["runtime_modules"])
-        self.assertIn("MethylBERT-hg19-data", methylbert_cpu["required_assets"]["data_modules"])
-        self.assertIn("MethylBERT-gpu", methylbert_gpu["required_assets"]["runtime_modules"])
-        # The old WGBS-sourced array_epic_cpg bundle is not a native EPIC
-        # selector or the explicit, build-aware derived projection route.
-        self.assertFalse(any(
-            row["source_platform"] == "wgbs" and row["analysis_contract"] == "array_epic_cpg"
-            for row in candidates
-        ))
-        self.assertTrue(matrix["legacy_quarantined_candidates"])
-
-        derived = [row for row in candidates if row["route_family"] in {"wgbs-to-epic", "wgbs-to-450k"}]
-        self.assertTrue(derived)
-        self.assertTrue(all(row["input_type"] in {"bed", "bam"} for row in derived))
-        self.assertFalse(any(row["input_type"] == "pat" for row in derived))
-
-        native = [row for row in candidates if row["route_family"] == "wgbs-native"]
-        self.assertTrue(native)
-        self.assertFalse(any(row["tool"] == "CelFiE" and row["input_type"] == "pat" for row in native))
-        self.assertFalse(any(row["tool"] in {"CelFEER", "UXM", "MethylBERT"} and row["input_type"] == "bed" for row in native))
-        self.assertTrue(all(row["conda_compatibility_status"] == "PENDING" for row in candidates))
-        self.assertTrue(all(row["distribution_approval_status"] == "PENDING_OWNER_REVIEW" for row in candidates))
-
-    def test_baseline_fixture_join_respects_input_route_not_reference_platform(self):
-        from scripts.collect_baseline_candidates import fixture_reference_route_matches
-
-        epic_fixture = {
-            "scenario": "immune12", "platform": "epic", "route": "array-native",
-            "genome_build": "not_applicable",
-        }
-        projected_epic_reference = {
-            "scenario": "immune12", "source_platform": "epic",
-            "analysis_contract": "wgbs_derived_epic_cpg_v1", "genome_build": "hg38",
-        }
-        self.assertFalse(fixture_reference_route_matches(epic_fixture, projected_epic_reference))
-
-        epic_to_450k_reference = {
-            "scenario": "immune12", "source_platform": "450k",
-            "analysis_contract": "array_epic_from_450k_common_cpg_v1", "genome_build": "not_applicable",
-        }
-        self.assertTrue(fixture_reference_route_matches(epic_fixture, epic_to_450k_reference))
-        self.assertFalse(fixture_reference_route_matches(
-            epic_fixture, {**epic_to_450k_reference, "source_platform": "epic"}
-        ))
-
-        wgbs_fixture = {
-            "scenario": "epithelial", "platform": "wgbs", "route": "wgbs-native", "genome_build": "hg19",
-        }
-        projected_450k_reference = {
-            "scenario": "epithelial", "source_platform": "450k",
-            "analysis_contract": "wgbs_derived_450k_cpg_v1", "genome_build": "hg19",
-        }
-        self.assertTrue(fixture_reference_route_matches(wgbs_fixture, projected_450k_reference))
-        self.assertFalse(fixture_reference_route_matches(
-            wgbs_fixture, {**projected_450k_reference, "source_platform": "epic"}
-        ))
-
-        wrong_build_reference = {**projected_450k_reference, "genome_build": "hg38"}
-        self.assertFalse(fixture_reference_route_matches(wgbs_fixture, wrong_build_reference))
-
     def test_package_payload_audit_rejects_private_paths_and_build_bytecode(self):
         from scripts.audit_conda_payload import allowed_source_member, allowed_wheel_member, check_names, safe_archive_path, scan_private_paths
         from scripts.build_source_snapshot import files as source_allowlist_files
@@ -256,12 +130,12 @@ class MethUnmixControlPlaneTests(unittest.TestCase):
             ("pkg/readme.txt", b"generic relative path only"),
         ])
         self.assertEqual(hits, ["pkg/helper.py"])
-        self.assertTrue(safe_archive_path("methunmix-2.0.0rc1/src/module.py"))
-        self.assertFalse(safe_archive_path("methunmix-2.0.0rc1/../../outside"))
-        self.assertFalse(safe_archive_path(r"methunmix-2.0.0rc1\src\module.py"))
-        self.assertTrue(allowed_source_member("methunmix-2.0.0rc1/src/methunmix_assets/nextflow_ref/tools/.gitkeep"))
-        self.assertTrue(allowed_source_member("methunmix-2.0.0rc1/src/methunmix_assets/deconvolution/wgbs_scripts/uxm"))
-        self.assertFalse(allowed_source_member("methunmix-2.0.0rc1/src/methunmix.egg-info/PKG-INFO"))
+        self.assertTrue(safe_archive_path("methunmix-2.0.0rc2/src/module.py"))
+        self.assertFalse(safe_archive_path("methunmix-2.0.0rc2/../../outside"))
+        self.assertFalse(safe_archive_path(r"methunmix-2.0.0rc2\src\module.py"))
+        self.assertTrue(allowed_source_member("methunmix-2.0.0rc2/src/methunmix_assets/nextflow_ref/tools/.gitkeep"))
+        self.assertTrue(allowed_source_member("methunmix-2.0.0rc2/src/methunmix_assets/deconvolution/wgbs_scripts/uxm"))
+        self.assertFalse(allowed_source_member("methunmix-2.0.0rc2/src/methunmix.egg-info/PKG-INFO"))
         self.assertTrue(allowed_wheel_member("demethflow_core/cli.py"))
         self.assertTrue(allowed_wheel_member("methunmix_assets/assets/catalog.json"))
         self.assertFalse(allowed_wheel_member("unexpected/payload.py"))
@@ -320,51 +194,6 @@ class MethUnmixControlPlaneTests(unittest.TestCase):
         ):
             util.require_linux_x86_64_workflow()
 
-    def test_gpu_static_audit_reports_lineage_without_claiming_runtime_pass(self):
-        from scripts import audit_gpu_claims
-
-        with tempfile.TemporaryDirectory(prefix="methunmix-gpu-audit-") as tmp:
-            root = Path(tmp)
-            selector = "builtin.fixture.wgbs@1.0.0"
-            bundle = root / "references" / "builtin.fixture.wgbs" / "1.0.0"
-            evidence_path = bundle / "validation" / "gpu.json"
-            evidence_path.parent.mkdir(parents=True)
-            evidence = {"status": "PASS", "reference": "builtin.fixture.wgbs@0.9.0"}
-            evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
-            evidence_digest = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
-            manifest = {
-                "status": "PARTIAL",
-                "artifact_checksums": {"validation/gpu.json": evidence_digest},
-                "tool_capabilities": {
-                    "MEnet": {
-                        "status": "RELEASED_UNVALIDATED",
-                        "artifacts": {"gpu_validation": "validation/gpu.json"},
-                        "execution_profiles": {"gpu": {"status": "RELEASED_UNVALIDATED", "runtime_modules": ["MEnet"]}},
-                    },
-                },
-            }
-            manifest_path = bundle / "manifest.json"
-            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-            matrix = {
-                "schema": "methunmix-capability-matrix-v2",
-                "technical_candidates": [{
-                    "selector": selector, "tool": "MEnet", "device": "gpu",
-                    "capability_id": "fixture.wgbs.MEnet.gpu",
-                    "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
-                    "scientific_status": "RELEASED_UNVALIDATED",
-                    "device_profile_status": "RELEASED_UNVALIDATED",
-                }],
-            }
-            matrix_path = root / "matrix.json"
-            matrix_path.write_text(json.dumps(matrix), encoding="utf-8")
-            with patch.object(audit_gpu_claims, "probe_gpu", return_value={"status": "NOT_AVAILABLE", "hardware_inference_run": False}):
-                report = audit_gpu_claims.audit(matrix_path, root / "references")
-            self.assertEqual(report["status"], "STATIC_HASHES_PASS_WITH_SELECTOR_REVIEW_RUNTIME_E2E_PENDING")
-            self.assertEqual(report["summary"]["manifest_digest_mismatches"], 0)
-            self.assertEqual(report["summary"]["evidence_hash_or_path_failures"], 0)
-            self.assertEqual(report["summary"]["historical_selector_reports_without_explicit_byte_identity_binding"], 1)
-            self.assertEqual(report["runtime_conda_e2e"], "PENDING")
-
     def test_source_snapshot_refuses_symlink_escape(self):
         import tempfile
         from pathlib import Path
@@ -382,33 +211,11 @@ class MethUnmixControlPlaneTests(unittest.TestCase):
                 patch.object(build_source_snapshot, "ROOT", root),
                 patch.object(build_source_snapshot, "INCLUDE_FILES", {"README.md"}),
                 patch.object(build_source_snapshot, "INCLUDE_DIRS", {"src"}),
+                patch.object(build_source_snapshot, "INCLUDE_SCRIPTS", set()),
                 patch.object(build_source_snapshot, "EXCLUDE_PARTS", set()),
             ):
                 with self.assertRaisesRegex(ValueError, "symlinked source allowlist member"):
                     build_source_snapshot.files()
-
-    def test_matrix_preserves_ru_explicit_only_and_device_profile_boundaries(self):
-        matrix_path = PROJECT_ROOT.parent.parent / "evidence" / "capability_matrix_rc.json"
-        matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
-        candidates = matrix["technical_candidates"]
-        medecom = [row for row in candidates if row["tool"] == "MeDeCom"]
-        self.assertTrue(medecom)
-        self.assertTrue(all(row["execution_policy"] == "explicit_only" for row in medecom))
-        self.assertTrue(all(row["requires_explicit_tool_selection"] for row in medecom))
-        methylbert = [row for row in candidates if row["tool"] == "MethylBERT"]
-        self.assertTrue({row["device"] for row in methylbert} >= {"cpu", "gpu"})
-        self.assertFalse(any(row["device_profile_status"] == "UNVALIDATED" for row in methylbert))
-        self.assertTrue(any(row["reason_code"] == "DEVICE_PROFILE_UNVALIDATED" for row in matrix["blocked_candidates"]))
-        self.assertEqual(matrix["platform_support"]["package_platform_support"], ["noarch"])
-        self.assertEqual(matrix["platform_support"]["workflow_execution_platform_support"], ["linux-64"])
-        self.assertTrue(all(row["warning_required"] for row in medecom if row["scientific_status"] == "RELEASED_UNVALIDATED"))
-        self.assertTrue(all(row["tools_all_policy"] == "EXCLUDE_EXPLICIT_ONLY" for row in medecom))
-        self.assertTrue(all(row["tools_all_policy"] == "INCLUDE" for row in methylbert if not row["requires_explicit_route_opt_in"]))
-        projected = [row for row in candidates if row["requires_explicit_route_opt_in"]]
-        self.assertTrue(projected)
-        self.assertTrue(all(row["tools_all_policy"] == "INCLUDE_AFTER_ROUTE_OPT_IN" for row in projected if row["execution_policy"] == "normal"))
-        self.assertTrue(all(row["route_disclosures"] == ["EXPLICIT_ROUTE_OPT_IN_REQUIRED"] for row in projected))
-        self.assertTrue(all(row["warning_required"] == bool(row["release_disclosures"]) for row in candidates))
 
     def test_ru_disclosure_and_tools_all_policy_are_not_science_promotion(self):
         from types import SimpleNamespace

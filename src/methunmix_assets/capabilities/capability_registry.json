@@ -1,7 +1,7 @@
 {
   "schema": "methunmix-capability-registry-v2",
   "product": "MethUnmix",
-  "software_version": "2.0.0rc1",
+  "software_version": "2.0.0rc2",
   "package_platform_support": ["noarch"],
   "workflow_execution_platform_support": ["linux-64"],
   "asset_architecture": "linux-64",
