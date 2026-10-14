@@ -21,6 +21,8 @@ INCLUDE_FILES = {
     "NOTICE",
     "CITATION.cff",
     "README.md",
+    "RELEASE_NOTES.md",
+    "SECURITY.md",
     "VERSIONING_POLICY.md",
     "COMPATIBILITY_RULES.json",
 }
