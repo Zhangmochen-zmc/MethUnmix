@@ -1,0 +1,36 @@
+{
+  "schema": "methunmix-adapter-descriptor-v1",
+  "adapter_id": "celfie-native-wgbs-v1",
+  "tool": "CelFiE",
+  "workflow_family": "native-wgbs-supervised",
+  "supported_analysis_contracts": ["wgbs_native_hg19", "wgbs_native_hg38"],
+  "input_representations": ["bed"],
+  "reference_requirement": "required",
+  "runtime_requirement": "external_runtime_contract_and_manifest_declared",
+  "sample_constraint": "single_or_multi_sample",
+  "output_contracts": ["cell_proportions_v1"],
+  "operations": [
+    "validate_input",
+    "prepare_input",
+    "execute",
+    "parse_output",
+    "validate_output",
+    "collect_provenance"
+  ],
+  "provenance_fields": [
+    "input_identity",
+    "reference_identity",
+    "external_runtime_identity",
+    "parameters",
+    "output_identity",
+    "release_disclosure"
+  ],
+  "adapter_api_version": "1",
+  "supported_profiles": ["cpu", "gpu"],
+  "parameter_semantics": ["external_runtime_root", "manifest_atlas"],
+  "model_requirements": [],
+  "cacheable_steps": [],
+  "recovery_semantics": "no_adapter_output_cache; workflow_source_receipt_only",
+  "error_classes": ["INPUT_CONTRACT", "RUNTIME_CONTRACT", "REFERENCE_CONTRACT", "OUTPUT_CONTRACT", "ADAPTER_API_INCOMPATIBLE"],
+  "scientific_disclosure_source": "reference_manifest_release_disclosure"
+}

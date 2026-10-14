@@ -1,0 +1,32 @@
+{
+  "schema": "methunmix-owner-license-and-target-decisions-v1",
+  "recorded_at": "2026-10-12T12:00:14+08:00",
+  "timezone": "Asia/Shanghai",
+  "supersedes_settings_in": "OWNER_DECISIONS_2026-10-12.json",
+  "software": {
+    "license": "MIT",
+    "commercial_use_permitted": true,
+    "github_repository": "https://github.com/Zhangmochen-zmc/MethUnmix",
+    "biocode_target": "PREPARE_SAME_PRIMARY_ARTIFACTS",
+    "biocode_entry_id": null
+  },
+  "references": {
+    "license_selection_status": "OWNER_SELECTED_CC_BY_NC_4_0",
+    "license_identifier": "CC-BY-NC-4.0",
+    "canonical_url": "https://creativecommons.org/licenses/by-nc/4.0/",
+    "commercial_authorization_contact": {
+      "name": "Mochen Zhang",
+      "email": "zhangmochen@big.ac.cn",
+      "contact_is_authorization": false,
+      "can_replace_upstream_authorization": false
+    },
+    "rights_holder_status": "PENDING_OWNER_CONFIRMATION",
+    "third_party_material": "RETAINS_APPLICABLE_TERMS",
+    "hosting_platform": null,
+    "download_sources_nonnull": 0
+  },
+  "public_actions": {
+    "status": "PUBLIC_ACTION_NOT_AUTHORIZED",
+    "executed": []
+  }
+}

@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import os
 import platform
+import shlex
 import shutil
+import stat
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Mapping
 
 from . import PROJECT_ROOT
 from .catalog import ReferenceCatalog
@@ -29,6 +33,7 @@ from .manifest import (
 )
 from .epic_projection import CONTRACT as EPIC_FROM_450K_CONTRACT, inspect_projection_inputs
 from .external_runtime import EXTERNAL_TOOLS, discover_external_runtimes, external_runtime_root_from_env
+from .local_dependencies import verify_runtime_binding_observations
 from .wgbs_projection import inspect_wgbs_projection_inputs, project_wgbs_inputs, target_platform_for_contract
 from .wgbs_bam import discover_bam_samples, is_bam_input
 from .modules import ModuleStore
@@ -569,6 +574,8 @@ class DoctorResult:
     projection_preflight: dict | None = None
     projection_report: dict | None = None
     release_disclosures: dict[str, dict[str, object]] = field(default_factory=dict)
+    execution_plan: dict[str, object] = field(default_factory=dict)
+    adapter_execution: dict[str, dict[str, object]] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -576,6 +583,48 @@ class DoctorResult:
 
     def add(self, name: str, ok: bool, detail: str, required: bool = True) -> None:
         self.checks.append(Check(name, ok, detail, required))
+
+
+def validate_selected_adapter_execution_contracts(result: DoctorResult) -> None:
+    """Add pure selected-adapter argument checks to a doctor result.
+
+    This helper is used by the shared preflight path for plan, doctor and run.
+    It invokes neither a container nor a workflow; it only translates already
+    resolved manifest capabilities into the established argument contract.
+    """
+    try:
+        from .adapter_runtime import AdapterContext, adapter_for_tool
+    except Exception as exc:
+        result.add("adapter-execution-contract", False, str(exc))
+        return
+    if result.bundle is None:
+        return
+    for tool in result.selected_tools:
+        adapter = adapter_for_tool(tool)
+        if adapter is None:
+            continue
+        capability = result.bundle.tools.get(tool)
+        if capability is None:
+            result.add(f"adapter-execution-contract:{tool}", False, "selected tool has no resolved capability")
+            continue
+        context = AdapterContext(
+            result.bundle,
+            capability,
+            tool,
+            result.accelerator,
+            result.execution_parameters.get(tool, {}),
+            result.external_runtime_paths.get(tool),
+        )
+        try:
+            preflight = adapter.execution_preflight(context)
+        except DeMethFlowError as exc:
+            result.add(f"adapter-execution-contract:{tool}", False, str(exc))
+        else:
+            result.add(
+                f"adapter-execution-contract:{tool}",
+                True,
+                ",".join(str(flag) for flag in preflight["argument_flags"]),
+            )
 
 
 def choose_container_engine(requested: str) -> tuple[str | None, str | None]:
@@ -1013,16 +1062,47 @@ def check_methylbert_reference_contract(
     )
 
 
-def bundled_nextflow() -> list[str] | None:
+def nextflow_discovery() -> tuple[list[str] | None, str]:
+    """Resolve one supported Nextflow command without guessing past an override.
+
+    A batch controller may set ``METHUNMIX_NEXTFLOW_CMD`` for its child
+    process.  That setting is an explicit product configuration boundary: a
+    malformed or non-executable value is reported as such and does not fall
+    through to an unrelated executable inherited from ``PATH``.
+    """
     launcher = PROJECT_ROOT / "runtime" / "nextflow" / "bin" / "nextflow"
     java = PROJECT_ROOT / "runtime" / "jre" / "bin" / "java"
     if launcher.is_file() and os.access(launcher, os.X_OK) and java.is_file():
-        return [str(launcher)]
+        return [str(launcher)], f"bundled Nextflow: {launcher}"
     override = os.environ.get("METHUNMIX_NEXTFLOW_CMD") or os.environ.get("DEMETHFLOW_NEXTFLOW_CMD")
     if override:
-        return override.split()
+        try:
+            command = shlex.split(override)
+        except ValueError as exc:
+            return None, f"configured Nextflow command is not valid shell-style argv: {exc}"
+        if not command:
+            return None, "configured Nextflow command is empty"
+        configured = command[0]
+        if os.path.isabs(configured):
+            executable = Path(configured)
+            if not executable.is_file() or not os.access(executable, os.X_OK):
+                return None, f"configured Nextflow executable is unavailable: {configured}"
+            command[0] = str(executable.resolve())
+            return command, f"configured Nextflow: {command[0]}"
+        resolved = shutil.which(configured)
+        if not resolved:
+            return None, f"configured Nextflow executable is unavailable on PATH: {configured}"
+        command[0] = resolved
+        return command, f"configured Nextflow: {resolved}"
     executable = shutil.which("nextflow")
-    return [executable] if executable else None
+    if executable:
+        return [executable], f"system Nextflow: {executable}"
+    return None, "bundled/system Nextflow not found"
+
+
+def bundled_nextflow() -> list[str] | None:
+    """Backwards-compatible command accessor for workflow construction."""
+    return nextflow_discovery()[0]
 
 
 def find_runtime_file(module_name: str, runtime_root: Path | None = None) -> Path | None:
@@ -1045,6 +1125,29 @@ def find_runtime_file(module_name: str, runtime_root: Path | None = None) -> Pat
             if path.is_file():
                 return path.resolve()
     return None
+
+
+def _runtime_file_for_preflight(
+    module_name: str, runtime_root: Path | None,
+    local_runtime_files: Mapping[str, Path] | None,
+) -> Path | None:
+    """Select a freshly verified local binding before legacy registry lookup.
+
+    The optional mapping is constructed only by the local dependency resolver
+    in this invocation.  Requiring a regular non-symlink file here prevents a
+    simple locator/status string from becoming an execution capability.  The
+    runner hashes the selected file again immediately before launch.
+    """
+    if local_runtime_files is not None and module_name in local_runtime_files:
+        candidate = local_runtime_files[module_name]
+        try:
+            info = candidate.lstat()
+        except OSError:
+            return None
+        if candidate.is_symlink() or not candidate.is_file() or not stat.S_ISREG(info.st_mode):
+            return None
+        return candidate
+    return find_runtime_file(module_name, runtime_root)
 
 
 def find_data_module(module_name: str, runtime_root: Path | None = None) -> tuple[Path, dict[str, Path]] | None:
@@ -1146,17 +1249,51 @@ def doctor(
     medecom_lambda: str = "auto",
     medecom_nfolds: int | None = None,
     methylcibersort_permutations: int = 1000,
+    preprocess_threads: int = 4,
+    preprocess_sort_memory: str = "768M",
+    bam_contig_policy: str = "strict",
     analysis_contract: str | None = None,
     allow_validation_candidate: bool = False,
+    isolated_reference_root: bool = False,
+    request_provenance: dict[str, object] | None = None,
+    check_mode: str = "quick",
+    installation_dependency_plan: dict[str, object] | None = None,
+    local_runtime_files: Mapping[str, Path] | None = None,
 ) -> DoctorResult:
+    if check_mode not in {"quick", "deep", "execution_preflight"}:
+        raise DeMethFlowError("check_mode must be quick, deep, or execution_preflight")
     result = DoctorResult(accelerator=accelerator)
     input_is_bam = bool(input_path and is_bam_input(input_path))
+    valid_preprocess_threads = (
+        isinstance(preprocess_threads, int)
+        and not isinstance(preprocess_threads, bool)
+        and preprocess_threads >= 1
+    )
+    result.add(
+        "parameter:bam-preprocess-threads",
+        valid_preprocess_threads,
+        str(preprocess_threads) if valid_preprocess_threads else "--preprocess-threads must be a positive integer",
+    )
+    try:
+        from .wgbs_bam import validate_sort_memory
+
+        normalized_sort_memory = validate_sort_memory(preprocess_sort_memory)
+        result.add("parameter:bam-preprocess-sort-memory", True, normalized_sort_memory)
+    except DeMethFlowError as exc:
+        normalized_sort_memory = str(preprocess_sort_memory)
+        result.add("parameter:bam-preprocess-sort-memory", False, str(exc))
+    valid_contig_policy = bam_contig_policy in {"strict", "primary-only"}
+    result.add(
+        "parameter:bam-contig-policy",
+        valid_contig_policy,
+        str(bam_contig_policy) if valid_contig_policy else "--bam-contig-policy must be strict or primary-only",
+    )
     result.add("host-os", platform.system() == "Linux", f"{platform.system()} {platform.machine()}")
     result.add("host-arch", platform.machine() in {"x86_64", "amd64"}, platform.machine())
     result.add("python", tuple(map(int, platform.python_version_tuple()[:2])) >= (3, 9), platform.python_version())
-    nf = bundled_nextflow()
+    nf, nextflow_detail = nextflow_discovery()
     result.nextflow_command = nf
-    result.add("nextflow", bool(nf), " ".join(nf) if nf else "bundled/system Nextflow not found")
+    result.add("nextflow", bool(nf), nextflow_detail)
     if runtime == "container":
         engine, executable = choose_container_engine(container_engine)
         result.container_engine = engine
@@ -1273,7 +1410,7 @@ def doctor(
                     and any(any(resolved_input.rglob(pattern)) for pattern in supported)
                 )
                 result.add("input", has_input, str(resolved_input))
-        catalog = ReferenceCatalog.discover(reference_root).scan(verify_files=False)
+        catalog = ReferenceCatalog.discover(reference_root, isolated=isolated_reference_root).scan(verify_files=False)
         result.add(
             "reference-catalog",
             not catalog.problems,
@@ -1412,6 +1549,7 @@ def doctor(
                     "version": runtime.version,
                     "license": runtime.license,
                     "required_files": ",".join(runtime.required_files),
+                    "content_sha256": runtime.content_sha256,
                 }
                 result.add(f"external-runtime:{tool}", True, f"{runtime.path}; {runtime.identity} {runtime.version}")
             if input_is_bam:
@@ -1829,7 +1967,7 @@ def doctor(
                 is_native_wgbs_contract(bundle.contract) and "MEnet" in selected
                 and "wgbs-common" not in bundle.tools["MEnet"].effective_runtime_modules(accelerator)
             ):
-                common_runtime = find_runtime_file("wgbs-common", runtime_root)
+                common_runtime = _runtime_file_for_preflight("wgbs-common", runtime_root, local_runtime_files)
                 result.add(
                     "runtime:wgbs-common",
                     common_runtime is not None,
@@ -1851,7 +1989,7 @@ def doctor(
                     except DeMethFlowError as exc:
                         result.add(f"artifact:{tool}:{key}", False, str(exc))
                 for module_name in capability.effective_runtime_modules(accelerator):
-                    runtime_file = find_runtime_file(module_name, runtime_root)
+                    runtime_file = _runtime_file_for_preflight(module_name, runtime_root, local_runtime_files)
                     result.add(
                         f"runtime:{module_name}",
                         runtime_file is not None,
@@ -2123,6 +2261,40 @@ def doctor(
                 result.container_sif_smoke["detail"],
                 required=False,
             )
+    if installation_dependency_plan and installation_dependency_plan.get("state") == "BLOCKED":
+        result.add(
+            "catalog-installation-plan",
+            False,
+            json.dumps(installation_dependency_plan.get("blockers", []), ensure_ascii=False),
+        )
+    elif installation_dependency_plan:
+        bindings = installation_dependency_plan.get("local_dependencies", [])
+        if isinstance(bindings, list):
+            for name, ok, detail in verify_runtime_binding_observations(bindings, result.runtime_files):
+                result.add(name, ok, detail)
+    # Keep execution-intent validation in the shared doctor layer.  This is
+    # deliberately pure: it only translates the selected manifest capability
+    # to existing Nextflow flags and catches a missing conditional artifact
+    # before plan/doctor present the route as ready.  The run path calls the
+    # same adapter method again immediately before it records a workflow.
+    validate_selected_adapter_execution_contracts(result)
+    result.execution_plan = execution_plan_for_doctor(
+        result,
+        mode=mode,
+        scenario=scenario,
+        platform_name=platform_name,
+        genome_build=genome_build,
+        analysis_contract=analysis_contract,
+        input_path=input_path,
+        requested_tools=tools,
+        allow_cross_platform=allow_cross_platform,
+        preprocess_threads=preprocess_threads,
+        preprocess_sort_memory=normalized_sort_memory,
+        bam_contig_policy=bam_contig_policy,
+        request_provenance=request_provenance,
+        check_mode=check_mode,
+        installation_dependency_plan=installation_dependency_plan,
+    )
     return result
 
 
@@ -2245,6 +2417,245 @@ def _reference_labels_cover_bundle(labels: list[str], bundle: ReferenceBundle) -
     return len(mapped) == len(expected) and set(mapped) == set(expected)
 
 
+def execution_plan_for_doctor(
+    result: DoctorResult,
+    *,
+    mode: str,
+    scenario: str | None,
+    platform_name: str | None,
+    genome_build: str | None,
+    analysis_contract: str | None,
+    input_path: Path | None,
+    requested_tools: str,
+    allow_cross_platform: bool,
+    preprocess_threads: int = 4,
+    preprocess_sort_memory: str = "768M",
+    bam_contig_policy: str = "strict",
+    request_provenance: dict[str, object] | None = None,
+    check_mode: str = "quick",
+    installation_dependency_plan: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Return the stable, observational execution plan for doctor and run.
+
+    A plan reports only what the existing doctor has selected or checked.  It
+    deliberately does not calculate large-input hashes, scan every BAM, or
+    promote scientific status.  Those expensive/content-dependent checks stay
+    in their explicit preflight or workflow phases and are named as deferred.
+    """
+    bundle = result.bundle
+    route = bundle.contract if bundle is not None else analysis_contract
+    selected: list[dict[str, object]] = []
+    try:
+        # The adapter registry is additive during the 2.x pilot.  A tool that
+        # has not yet migrated remains executable through its established
+        # workflow; a declared pilot adapter is still checked against the
+        # manifest capability and shown in the plan.
+        from .adapter_runtime import adapter_plan_record
+    except Exception as exc:
+        adapter_registry_problem = str(exc)
+    else:
+        adapter_registry_problem = None
+    if bundle is not None:
+        for tool in result.selected_tools:
+            capability = bundle.tools[tool]
+            status, reason = capability.effective_status(result.accelerator)
+            adapter = adapter_plan_record(
+                bundle=bundle,
+                capability=capability,
+                tool=tool,
+                accelerator=result.accelerator,
+                execution_parameters=result.execution_parameters.get(tool, {}),
+                external_runtime=result.external_runtime_paths.get(tool),
+            )
+            result.adapter_execution[tool] = adapter
+            selected.append({
+                "tool": tool,
+                "profile": result.accelerator,
+                "status": status,
+                "reason": reason,
+                "execution_policy": capability.execution_policy,
+                "output_contract": capability.output_contract,
+                "release_disclosure": result.release_disclosures.get(tool),
+                "adapter": adapter,
+            })
+    failed_required = [
+        {"name": check.name, "detail": check.detail}
+        for check in result.checks if check.required and not check.ok
+    ]
+    advisory_checks = [
+        {"name": check.name, "ok": check.ok, "detail": check.detail}
+        for check in result.checks if not check.required
+    ]
+    def check_phase(check: Check) -> str:
+        if check.name.startswith(("marker-", "input-axis", "input-content", "projection-input")):
+            return "DEEP"
+        if check.name.startswith(("container-sif-smoke", "runtime:", "data-module:", "external-runtime:")):
+            return "EXECUTION_PRECHECK"
+        return "QUICK"
+
+    checks = [
+        {
+            "name": check.name,
+            "status": "PASS" if check.ok else "FAIL",
+            "required": check.required,
+            "phase": check_phase(check),
+            "detail": check.detail,
+        }
+        for check in result.checks
+    ]
+    if route in {"wgbs_native_hg19", "wgbs_native_hg38"}:
+        steps = ["validate-native-wgbs-input", "materialize-bam-if-requested", "run-nextflow", "canonicalize-outputs"]
+    elif route in {"wgbs_derived_epic_cpg_v1", "wgbs_derived_450k_cpg_v1"}:
+        steps = ["validate-build-locked-wgbs-input", "project-wgbs-to-array-cpg-axis", "run-array-nextflow", "canonicalize-outputs"]
+    elif route == "array_epic_from_450k_common_cpg_v1":
+        steps = ["validate-epic-input", "project-to-450k-common-cpg-axis", "run-array-nextflow", "canonicalize-outputs"]
+    else:
+        steps = ["validate-array-input", "run-array-nextflow", "canonicalize-outputs"]
+    input_identity: dict[str, object] = {
+        "path": str(input_path.expanduser().resolve()) if input_path is not None else None,
+        "identity_scope": "path and doctor input-contract inspection; full input digest is recorded by run",
+    }
+    if input_path is not None and is_bam_input(input_path):
+        bam_preprocess: dict[str, object] = {
+            "applicable": True,
+            "threads": preprocess_threads,
+            "per_thread_sort_memory": preprocess_sort_memory,
+            "contig_policy": bam_contig_policy,
+            "disk_preflight": "DEFERRED_TO_RUN_BAM_PREPROCESS_PHASE",
+            "cache_identity": "RECORDED_AFTER_FULL_INPUT_IDENTITY_AND_RUNTIME_RESOLUTION",
+        }
+    else:
+        bam_preprocess = {
+            "applicable": False,
+            "reason": "input is not a BAM file; BAM materialisation resources are not applicable",
+        }
+    plan: dict[str, object] = {
+        "schema": "methunmix-execution-plan-v1",
+        "execution_readiness": "READY_TO_LAUNCH" if result.ok and bool(result.selected_tools) else "BLOCKED",
+        "scientific_status": "OBSERVATIONAL_ONLY_NO_PROMOTION",
+        "selection": {
+            "mode": mode,
+            "scenario": scenario,
+            "input_platform": platform_name,
+            "genome_build": genome_build,
+            "analysis_contract": route,
+            "requested_tools": requested_tools,
+            "accelerator": result.accelerator,
+            "allow_cross_platform": allow_cross_platform,
+            "reference_selector": bundle.selector if bundle is not None else None,
+            "reference_content_digest": bundle.content_digest() if bundle is not None else None,
+        },
+        "input": input_identity,
+        "effective_request": request_provenance or {
+            "source": "DIRECT_API_CALL",
+            "effective_values": {
+                "scenario": scenario, "platform": platform_name, "genome_build": genome_build,
+                "analysis_contract": route, "tools": requested_tools, "accelerator": result.accelerator,
+            },
+        },
+        "tools": {
+            "selected": selected,
+            "skipped": result.skipped_tools,
+        },
+        "dependencies": {
+            "runtime_images": {name: str(path) for name, path in result.runtime_files.items()},
+            "data_modules": {
+                module: {name: str(path) for name, path in exports.items()}
+                for module, exports in result.data_exports.items()
+            },
+            "external_runtimes": {
+                tool: {"path": str(result.external_runtime_paths[tool]), **result.external_runtime_metadata.get(tool, {})}
+                for tool in result.external_runtime_paths
+            },
+            "installation_dependency_plan": installation_dependency_plan or {
+                "state": "NOT_CHECKED_NO_CATALOG_METADATA_REQUESTED",
+                "detail": "no exact catalog dependency plan was requested for this direct-reference invocation",
+            },
+        },
+        "adapter_registry": {
+            "status": "AVAILABLE" if adapter_registry_problem is None else "UNAVAILABLE",
+            "problem": adapter_registry_problem,
+            "scope": "built-in bounded migration pilot; established workflows remain authority for unmigrated tools",
+        },
+        "constraints": {
+            "blocking_checks": failed_required,
+            "advisory_checks": advisory_checks,
+            "checks": checks,
+            "check_mode": check_mode,
+            "deep_checks_deferred": [
+                "full input digest and output digests are recorded by run",
+                "marker overlap and input-matrix gates may be deferred until BAM materialization when declared by doctor",
+            ],
+        },
+        "resource_contract": {
+            "schema": "methunmix-resource-contract-v1",
+            "scope": (
+                "declared task/resource controls only; no host-specific runtime, peak-memory, "
+                "or throughput prediction is inferred by doctor"
+            ),
+            "workflow_tasks": {
+                "cpu_source": "Nextflow task.cpus",
+                "host_core_autodetection": "PROHIBITED",
+                "thread_environment": "bounded by declared task.cpus in supported workflow wrappers",
+            },
+            "bam_preprocess": bam_preprocess,
+            "memory_estimate": {
+                "status": "NOT_ESTIMATED",
+                "reason": "peak memory depends on input, selected tool/runtime and host context; use bounded measured baselines before making a claim",
+            },
+            "concurrency": {
+                "status": "WORKFLOW_ENGINE_CONTROLLED",
+                "reason": "doctor records per-task controls but does not infer safe host-wide parallelism",
+            },
+        },
+        "steps": steps,
+        "expected_outputs": {
+            "run_manifest": "run_manifest.json",
+            "tool_status": "tool_status.tsv",
+            "canonical_outputs": "per-tool canonical deconvolution outputs under the selected output directory",
+        },
+        "release_disclosures": result.release_disclosures,
+    }
+    # Paths, timestamps and other observations are intentionally not included
+    # in this semantic identity.  A move of an output directory must not make
+    # the selected reference/profile/tool route look like a different plan.
+    semantic = {
+        "schema": plan["schema"],
+        "selection": plan["selection"],
+        "check_mode": check_mode,
+        "tools": [
+            {
+                **{key: row.get(key) for key in ("tool", "profile", "status", "execution_policy", "output_contract")},
+                "adapter": (
+                    {key: row.get("adapter", {}).get(key) for key in ("adapter_id", "adapter_api_version", "descriptor_sha256", "recovery_semantics")}
+                    if isinstance(row.get("adapter"), dict) else None
+                ),
+            }
+            for row in selected
+        ],
+        "skipped": [
+            {key: row.get(key) for key in ("tool", "status", "reason")}
+            for row in result.skipped_tools
+        ],
+        "checks": [
+            {key: row[key] for key in ("name", "status", "required", "phase")}
+            for row in checks
+        ],
+        "steps": steps,
+        "execution_parameters": result.execution_parameters,
+        "resource_contract": plan["resource_contract"],
+        "installation_dependency_plan": (installation_dependency_plan or {}).get("plan_identity"),
+    }
+    encoded = json.dumps(semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    plan["semantic_identity"] = {
+        "algorithm": "sha256",
+        "canonicalization": "json-sort-keys-utf8-separators-v1",
+        "scope": "selection, exact descriptor identity, check states and declared execution parameters; excludes paths and observations",
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+    return plan
+
+
 def result_as_dict(result: DoctorResult) -> dict:
     return {
         "ok": result.ok,
@@ -2267,5 +2678,7 @@ def result_as_dict(result: DoctorResult) -> dict:
         "projection_preflight": result.projection_preflight,
         "projection_report": result.projection_report,
         "release_disclosures": result.release_disclosures,
+        "execution_plan": result.execution_plan,
+        "adapter_execution": result.adapter_execution,
         "checks": [check.__dict__ for check in result.checks],
     }

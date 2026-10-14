@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from . import CORE_API, REFERENCE_SCHEMA, RUNTIME_API
 from .errors import ManifestError
@@ -154,6 +154,78 @@ class ToolCapability:
         return "QUARANTINED"
 
 
+def resolve_tool_selection(
+    tools: Mapping[str, ToolCapability],
+    requested: str,
+    *,
+    accelerator: str = "cpu",
+    allow_validation_candidate: bool = False,
+    contract: str = "",
+    version: str = "",
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Resolve a declared tool set under the public execution-policy contract.
+
+    This is deliberately the one policy implementation used by reference
+    manifests and by offline asset planning.  It does not inspect input files,
+    runtimes, or markers: those are distinct doctor/plan gates.  Keeping this
+    boundary narrow prevents an asset lock from silently selecting a different
+    READY/RU/profile set than an eventual run.
+    """
+    if requested.strip().lower() == "all":
+        selected: list[str] = []
+        skipped: list[dict[str, str]] = []
+        for name, cap in tools.items():
+            status, reason = cap.effective_status(accelerator)
+            # A quarantined/unavailable profile is blocked regardless of its
+            # policy metadata.  Do not relabel an engineering failure as
+            # explicit-only: users need the actual blocking status.
+            if status in {"QUARANTINED", "NOT_AVAILABLE", "NOT_ADAPTED", "INVALID"}:
+                skipped.append({"tool": name, "status": status, "reason": reason or ""})
+            elif cap.execution_policy == "explicit_only":
+                skipped.append({
+                    "tool": name,
+                    "status": "EXPLICIT_ONLY",
+                    "reason": reason or "explicit selection required",
+                })
+            elif status in {"READY", "RELEASED_UNVALIDATED"}:
+                selected.append(name)
+            else:
+                skipped.append({"tool": name, "status": status, "reason": reason or ""})
+        return selected, skipped
+
+    aliases = {"cibersort": "MethylCIBERSORT", "tsisa": "Tsisal", "prmeth": "PRmeth"}
+    normalized = {name.lower(): name for name in tools}
+    known = {name.lower(): name for name in KNOWN_TOOL_NAMES}
+    selected: list[str] = []
+    for raw in requested.split(","):
+        value = raw.strip()
+        if not value:
+            continue
+        name = aliases.get(value.lower()) or normalized.get(value.lower()) or known.get(value.lower())
+        if not name:
+            raise ManifestError(f"unknown tool {value!r}")
+        if name not in tools:
+            raise ManifestError(f"{name} is NOT_AVAILABLE: selected reference does not declare this tool")
+        cap = tools[name]
+        status, reason = cap.effective_status(accelerator)
+        validation_candidate = (
+            allow_validation_candidate
+            and cap.status == "QUARANTINED"
+            and cap.validation_candidate in VALIDATION_CANDIDATE_TOOLS
+            and name in VALIDATION_CANDIDATE_TOOLS[cap.validation_candidate]
+            and contract == "wgbs_native_hg19"
+            and version.endswith(("-rc1", "-rc2"))
+        )
+        if status not in {"READY", "RELEASED_UNVALIDATED"} and not validation_candidate:
+            suffix = f": {reason}" if reason else ""
+            raise ManifestError(f"{name} is {status}{suffix}")
+        if name not in selected:
+            selected.append(name)
+    if not selected:
+        raise ManifestError("--tools selected no tools")
+    return selected, []
+
+
 @dataclass(frozen=True)
 class ReferenceBundle:
     manifest_path: Path
@@ -214,57 +286,17 @@ class ReferenceBundle:
         accelerator: str = "cpu",
         allow_validation_candidate: bool = False,
     ) -> tuple[list[str], list[dict[str, str]]]:
-        if requested.strip().lower() == "all":
-            ready: list[str] = []
-            skipped: list[dict[str, str]] = []
-            for name, cap in self.tools.items():
-                status, reason = cap.effective_status(accelerator)
-                # A quarantined/unavailable profile is blocked regardless of
-                # its policy metadata.  Do not relabel an engineering failure
-                # as merely explicit-only, otherwise ``--tools all`` would
-                # hide the real reason and make a blocked tool look runnable.
-                if status in {"QUARANTINED", "NOT_AVAILABLE", "NOT_ADAPTED", "INVALID"}:
-                    skipped.append({"tool": name, "status": status, "reason": reason or ""})
-                elif cap.execution_policy == "explicit_only":
-                    skipped.append({"tool": name, "status": "EXPLICIT_ONLY", "reason": reason or "explicit selection required"})
-                elif status in {"READY", "RELEASED_UNVALIDATED"}:
-                    ready.append(name)
-                else:
-                    skipped.append({"tool": name, "status": status, "reason": reason or ""})
-            return ready, skipped
-        aliases = {"cibersort": "MethylCIBERSORT", "tsisa": "Tsisal", "prmeth": "PRmeth"}
-        normalized = {name.lower(): name for name in self.tools}
-        known = {name.lower(): name for name in KNOWN_TOOL_NAMES}
-        chosen: list[str] = []
-        for raw in requested.split(","):
-            value = raw.strip()
-            if not value:
-                continue
-            name = aliases.get(value.lower()) or normalized.get(value.lower()) or known.get(value.lower())
-            if not name:
-                raise ManifestError(f"{self.selector}: unknown tool {value!r}")
-            if name not in self.tools:
-                raise ManifestError(
-                    f"{self.selector}: {name} is NOT_AVAILABLE: selected reference does not declare this tool"
-                )
-            cap = self.tools[name]
-            status, reason = cap.effective_status(accelerator)
-            validation_candidate = (
-                allow_validation_candidate
-                and cap.status == "QUARANTINED"
-                and cap.validation_candidate in VALIDATION_CANDIDATE_TOOLS
-                and name in VALIDATION_CANDIDATE_TOOLS[cap.validation_candidate]
-                and self.contract == "wgbs_native_hg19"
-                and self.version.endswith(("-rc1", "-rc2"))
+        try:
+            return resolve_tool_selection(
+                self.tools,
+                requested,
+                accelerator=accelerator,
+                allow_validation_candidate=allow_validation_candidate,
+                contract=self.contract,
+                version=self.version,
             )
-            if status not in {"READY", "RELEASED_UNVALIDATED"} and not validation_candidate:
-                suffix = f": {reason}" if reason else ""
-                raise ManifestError(f"{self.selector}: {name} is {status}{suffix}")
-            if name not in chosen:
-                chosen.append(name)
-        if not chosen:
-            raise ManifestError("--tools selected no tools")
-        return chosen, []
+        except ManifestError as exc:
+            raise ManifestError(f"{self.selector}: {exc}") from exc
 
     def content_digest(self, verify_files: bool = False) -> str:
         pairs: list[tuple[str, str]] = []

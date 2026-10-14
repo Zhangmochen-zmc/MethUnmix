@@ -177,8 +177,6 @@ DATA_MODULE_SOURCES = {
 
 CORE_PATHS = [
     "VERSION",
-    "demethflow",
-    "demethflow.py",
     "demethflow_core",
     "scripts",
     "deconvolution",

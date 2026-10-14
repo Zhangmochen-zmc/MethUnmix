@@ -1,13 +1,66 @@
 include LICENSE NOTICE README.md CITATION.cff VERSION VERSIONING_POLICY.md COMPATIBILITY_RULES.json
+# The development tree contains internal work-package and acceptance records.
+# Only the reviewed public-facing documents are part of a PEP 517 source
+# distribution.  Do not turn this into a broad ``recursive-include docs``:
+# that would make a future internal hand-off note public by accident.
+include docs/ADAPTER_SDK_TEMPLATE.md docs/PUBLIC_USER_GUIDE.md docs/PUBLIC_USER_GUIDE_zh-CN.md
+include docs/REFERENCE_INSTALLATION_GUIDE.md docs/REFERENCE_INSTALLATION_GUIDE_zh-CN.md
+recursive-include docs/publication *.md *.json
+include scripts/audit_conda_environment.py
+include scripts/audit_conda_payload.py
+include scripts/audit_release_license_ledger.py
+include scripts/audit_release_sbom_scope.py
+include scripts/audit_reference_lifecycle_declarations.py
+include scripts/check_prepublication.py
+include scripts/verify_downstream_release.py
+include scripts/verify_postupload_release.py
+include scripts/audit_work_item_register.py
+include scripts/audit_version_identity.py
+include scripts/build_reference_lifecycle_registry.py
+include scripts/build_source_snapshot.py
+include scripts/normalize_wheel.py
+include scripts/qualify_rc_candidate.py
+# These private-release operation tests require host-specific launchers,
+# historical evidence, owner approval records, or release-gate generators
+# deliberately excluded from the portable upstream archive. Keep their source
+# in development, but do not advertise them as a runnable portable test suite.
+exclude tests/test_current_release_audit.py
+exclude tests/test_dev5_runtime_coverage.py
+exclude tests/test_future_work_plan_audit.py
+exclude tests/test_license_inventory.py
+exclude tests/test_reference_asset_release.py
+exclude tests/test_reference_distribution_inventory.py
+exclude tests/test_reference_license_approval_template.py
+exclude tests/test_reference_owner_approval.py
+exclude tests/test_reference_public_catalog.py
+exclude tests/test_reference_remote_audit.py
+exclude tests/test_resource_baseline_extractor.py
+exclude tests/test_stage3_8_host_helpers.py
+exclude tests/test_stage3_8_medecom_overnight_launcher.py
+exclude tests/test_work_item_register.py
+exclude tests/test_wp00_baseline_audit.py
 recursive-include src/methunmix_assets VERSION ASSET_BOUNDARY.txt
 recursive-include src/methunmix_assets/capabilities *.json
 recursive-include src/methunmix_assets/assets *.json
+include src/methunmix_assets/assets/metadata/README.md
 recursive-include src/methunmix_assets/deconvolution *.nf *.config
 recursive-include src/methunmix_assets/deconvolution/array_pro *.py
-recursive-include src/methunmix_assets/deconvolution/bin *.py *.R
-recursive-include src/methunmix_assets/deconvolution/wgbs_scripts *.py *.sh uxm
+recursive-include src/methunmix_assets/deconvolution/bin *.py *.R *.sh
+recursive-include src/methunmix_assets/deconvolution/wgbs_scripts *.py *.sh
 recursive-include src/methunmix_assets/nextflow_ref *.nf *.config *.py *.sh *.txt *.yml *.yaml *.json README.md
+include src/methunmix_assets/nextflow_ref/condarc
+include src/methunmix_assets/nextflow_ref/assets/.gitkeep
+include src/methunmix_assets/nextflow_ref/containers/.gitkeep
 global-exclude *.sif *.bam *.cram *.pat *.pat.gz *.bed *.bed.gz
 global-exclude .nextflow* work reports references runtimes tools
 prune src/methunmix_assets/deconvolution/wgbs_vendor
 prune src/methunmix_assets/deconvolution/vendor/prmeth_R
+exclude src/methunmix_assets/deconvolution/wgbs_scripts/celfie_run.py
+exclude src/methunmix_assets/deconvolution/wgbs_scripts/celfeer_bis.py
+exclude src/methunmix_assets/deconvolution/wgbs_scripts/celfeer_change.py
+exclude src/methunmix_assets/deconvolution/wgbs_scripts/celfeer_run.py
+exclude src/methunmix_assets/deconvolution/wgbs_scripts/celfeer_step1.sh
+exclude src/methunmix_assets/deconvolution/wgbs_scripts/celfeer_sum_reads_in_500_bins.py
+exclude src/methunmix_assets/deconvolution/wgbs_scripts/metdecode_run.py
+exclude src/methunmix_assets/deconvolution/wgbs_scripts/uxm
+exclude src/methunmix_assets/deconvolution/wgbs_scripts/uxm.sh

@@ -117,7 +117,14 @@ workflow {
     // --- 4. CelFEER ---
     if ( is_active('celfeer') ) {
         ch_tool_celfeer = Channel.value(file(params.tool_celfeer, checkIfExists: true))
-        PRE_CELFEER_STEP1(ch_pat_raw, params.ref_celfeer_cpg, params.ref_celfeer_bins, "${params.scripts_dir}/celfeer_step1.sh")
+        // CelFEER preprocessing contains third-party and derived code.  It is
+        // intentionally supplied by the validated external runtime, never by
+        // the public core payload.
+        ch_celfeer_step1 = Channel.value(file("${params.tool_celfeer}/adapters/celfeer_step1.sh", checkIfExists: true))
+        ch_celfeer_change = Channel.value(file("${params.tool_celfeer}/adapters/celfeer_change.py", checkIfExists: true))
+        ch_celfeer_bis = Channel.value(file("${params.tool_celfeer}/adapters/celfeer_bis.py", checkIfExists: true))
+        ch_celfeer_sum = Channel.value(file("${params.tool_celfeer}/adapters/celfeer_sum_reads_in_500_bins.py", checkIfExists: true))
+        PRE_CELFEER_STEP1(ch_pat_raw, params.ref_celfeer_cpg, params.ref_celfeer_bins, ch_celfeer_step1, ch_celfeer_change, ch_celfeer_bis, ch_celfeer_sum)
         // PRE_CELFEER_STEP1 completes in scheduler order.  A plain collect()
         // therefore hashes a different path-list order when the same tasks
         // are replayed from cache, forcing the merge and every downstream
@@ -625,12 +632,16 @@ process PRE_CELFEER_STEP1 {
     // Path input and change the downstream aggregate task hash despite an
     // identical staged command and identical symlink targets.
     fair true
-    input: tuple val(sample_id), path(pat); path cpg; path bins; path script_sh
+    input:
+    tuple val(sample_id), path(pat)
+    path cpg
+    path bins
+    path script_sh
+    path change_py
+    path bis_py
+    path sum_py
     output: tuple val(sample_id), path("${sample_id}_binned.txt")
     script:
-    def change_py = "${params.scripts_dir}/celfeer_change.py"
-    def bis_py    = "${params.scripts_dir}/celfeer_bis.py"
-    def sum_py    = "${params.scripts_dir}/celfeer_sum_reads_in_500_bins.py"
     """
     bash ${script_sh} '${pat}' '${sample_id}_binned.txt' '${cpg}' '${bins}' '${change_py}' '${bis_py}' '${sum_py}' ${task.cpus}
     """

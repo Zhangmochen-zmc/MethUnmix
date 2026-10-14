@@ -1,0 +1,38 @@
+{
+  "schema": "methunmix-owner-decisions-v1",
+  "recorded_at": "2026-10-12T00:33:20+08:00",
+  "timezone": "Asia/Shanghai",
+  "source": "owner instruction in the active MethUnMix 1.0.0 local publication-readiness work package",
+  "authors": {
+    "status": "OWNER_DECLARED",
+    "ordered": [
+      {"name": "Mochen Zhang", "affiliation_zh": "中国科学院北京基因组研究所（国家生物信息中心）", "affiliation_en": "Beijing Institute of Genomics, Chinese Academy of Sciences (China National Center for Bioinformation)", "email": "zhangmochen@big.ac.cn", "orcid": null},
+      {"name": "Xiangyu Yu", "affiliation_zh": "中国科学院北京基因组研究所（国家生物信息中心）", "affiliation_en": "Beijing Institute of Genomics, Chinese Academy of Sciences (China National Center for Bioinformation)", "email": null, "orcid": null},
+      {"name": "Yaoke Wei", "affiliation_zh": "中国科学院北京基因组研究所（国家生物信息中心）", "affiliation_en": "Beijing Institute of Genomics, Chinese Academy of Sciences (China National Center for Bioinformation)", "email": null, "orcid": null}
+    ],
+    "contact": "Mochen Zhang",
+    "contact_email": "zhangmochen@big.ac.cn"
+  },
+  "software": {
+    "rights_holder_status": "OWNER_DECLARED",
+    "rights_holder": "Mochen Zhang",
+    "license": "MIT",
+    "commercial_use_permitted": true
+  },
+  "references": {
+    "authors_status": "OWNER_DECLARED",
+    "authors_same_order_as_software": true,
+    "distribution_status": "OWNER_APPROVED_DISTRIBUTION",
+    "derived_object_count": 30,
+    "approval_binding_file": "REFERENCE_LICENSE_CONTINUATION_REVIEW.tsv",
+    "approval_binding_sha256": "8f641feee00962f9605eb92ede71e6dafda3413f6c814c2c66707a1d19d336bc",
+    "excluded_rows": [],
+    "use_policy_status": "LICENSE_POLICY_NONCOMMERCIAL_CONFIRMED",
+    "commercial_use_permitted": false,
+    "license_instrument_status": "LICENSE_INSTRUMENT_PENDING",
+    "rights_holder_status": "PENDING_OWNER_CONFIRMATION"
+  },
+  "platform": {"status": "PLATFORM_UNSPECIFIED", "github": null, "zenodo": null, "pypi": null, "bioconda": null},
+  "public_actions": {"status": "PUBLIC_ACTION_NOT_AUTHORIZED", "executed": []},
+  "scope_limits": ["does not establish third-party rights", "does not cover SIF, algorithms, models, inputs or external components", "does not authorize any remote or public action"]
+}

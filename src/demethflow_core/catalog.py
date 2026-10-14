@@ -24,10 +24,14 @@ class ReferenceCatalog:
         self.conflicting_bundles: dict[str, ReferenceBundle] = {}
 
     @classmethod
-    def discover(cls, explicit_root: Path | None = None) -> "ReferenceCatalog":
+    def discover(cls, explicit_root: Path | None = None, *, isolated: bool = False) -> "ReferenceCatalog":
         roots: list[Path] = []
         if explicit_root:
             roots.append(explicit_root)
+        if isolated:
+            if not explicit_root:
+                raise ResolutionError("isolated reference discovery requires an explicit reference root")
+            return cls(roots)
         elif os.environ.get("METHUNMIX_REFERENCE_ROOT"):
             roots.append(Path(os.environ["METHUNMIX_REFERENCE_ROOT"]))
         elif os.environ.get("DEMETHFLOW_REFERENCE_ROOT"):

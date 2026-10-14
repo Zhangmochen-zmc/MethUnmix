@@ -45,10 +45,10 @@ def require_linux_x86_64_workflow() -> None:
 
 
 def require_local_executor(executor: str) -> None:
-    """Enforce MethUnmix 2.0's local-only scheduler support boundary."""
+    """Enforce MethUnMix's local-only scheduler support boundary."""
     if executor != "local":
         raise DeMethFlowError(
-            "EXECUTOR_UNSUPPORTED: MethUnmix 2.0 supports only the local Nextflow executor; "
+            "EXECUTOR_UNSUPPORTED: MethUnMix supports only the local Nextflow executor; "
             "Slurm is out of scope and is neither supported nor tested by this release."
         )
 
@@ -102,6 +102,24 @@ def atomic_write_json(path: Path, payload: Any) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
             handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+        fsync_directory(path.parent)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Atomically publish a UTF-8 text artifact beside JSON provenance files."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_name, path)
@@ -204,7 +222,7 @@ def prepare_data_home() -> Path:
         if not explicit_store:
             path.chmod(0o700)
     except OSError as exc:
-        raise ManifestError(f"Cannot prepare MethUnmix data directory {path}: {exc}") from exc
+        raise ManifestError(f"Cannot prepare MethUnMix data directory {path}: {exc}") from exc
     return path
 
 
@@ -241,4 +259,4 @@ def assert_no_symlink_components(path: Path) -> None:
     absolute = absolute_lexical_path(path)
     for candidate in (absolute, *absolute.parents):
         if candidate.is_symlink():
-            raise ManifestError(f"Refusing a symlink in MethUnmix managed path: {candidate}")
+            raise ManifestError(f"Refusing a symlink in MethUnMix managed path: {candidate}")

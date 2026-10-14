@@ -1,6 +1,6 @@
 """Fail-closed contract for third-party algorithm runtimes.
 
-The core MethUnmix distribution contains orchestration and adapters only.  The
+The core MethUnMix distribution contains orchestration and adapters only.  The
 algorithm implementations listed here are supplied by a separately licensed,
 user-installed runtime tree.  This module deliberately performs only bounded
 metadata/path validation; it never downloads, clones, or executes a scientific
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -21,6 +22,23 @@ EXTERNAL_TOOLS = frozenset({"CelFEER", "CelFiE", "MetDecode", "PRmeth", "UXM"})
 CONTRACT_SCHEMA = "methunmix-external-runtime-v1"
 MANIFEST_NAME = "methunmix-external-runtime.json"
 
+# The core invokes these entrypoints but never distributes them.  Keeping this
+# map here makes the runtime interface auditable and prevents a user manifest
+# from claiming a tool is installed while omitting a file the workflow needs.
+TOOL_ENTRYPOINTS: dict[str, tuple[str, ...]] = {
+    "CelFiE": ("scripts/celfie_new.py",),
+    "CelFEER": (
+        "scripts/celfeer.py",
+        "adapters/celfeer_step1.sh",
+        "adapters/celfeer_change.py",
+        "adapters/celfeer_bis.py",
+        "adapters/celfeer_sum_reads_in_500_bins.py",
+    ),
+    "UXM": ("src/uxm.py",),
+    "MetDecode": ("run.py", "metdecode/__init__.py", "metdecode/io.py", "metdecode/model.py", "metdecode/utils.py"),
+    "PRmeth": ("prmeth.R", "select_feature.R", "getCellTypeNumber.R", "simMixes.R"),
+}
+
 
 @dataclass(frozen=True)
 class ExternalRuntime:
@@ -30,6 +48,7 @@ class ExternalRuntime:
     version: str
     license: str
     required_files: tuple[str, ...]
+    content_sha256: str
 
 
 def _safe_relative(value: object, field: str) -> str:
@@ -41,13 +60,30 @@ def _safe_relative(value: object, field: str) -> str:
     return path.as_posix()
 
 
+def _content_digest(path: Path, files: tuple[str, ...]) -> str:
+    """Digest declared runtime entrypoints without following symlinks."""
+    digest = hashlib.sha256()
+    for relative in files:
+        candidate = path / relative
+        if not candidate.is_file() or candidate.is_symlink():
+            raise DeMethFlowError(f"EXTERNAL_RUNTIME_NOT_INSTALLED: required runtime file is missing: {candidate}")
+        file_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(file_digest.encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
 def discover_external_runtimes(root: Path | None, tools: set[str] | frozenset[str]) -> dict[str, ExternalRuntime]:
     """Validate an explicitly supplied runtime root for the selected tools.
 
     The root is intentionally not inferred from the source checkout.  A caller
     must pass ``--external-runtime-root`` (or ``METHUNMIX_EXTERNAL_RUNTIME_ROOT``)
     and provide a manifest with identity, version, license disclosure and file
-    requirements for every selected third-party tool.
+    requirements for every selected third-party tool.  A computed content
+    digest is always recorded; a manifest may additionally pin it with
+    ``content_sha256`` for fail-closed identity matching.
     """
     required = sorted(set(tools) & EXTERNAL_TOOLS)
     if not required:
@@ -83,7 +119,7 @@ def discover_external_runtimes(root: Path | None, tools: set[str] | frozenset[st
             path.relative_to(root)
         except ValueError as exc:  # defensive, PurePosixPath check above should catch this
             raise DeMethFlowError(f"EXTERNAL_RUNTIME_CONTRACT_INVALID: {tool}.path escapes root") from exc
-        if not path.exists() or path.is_symlink():
+        if not path.is_dir() or path.is_symlink():
             raise DeMethFlowError(f"EXTERNAL_RUNTIME_NOT_INSTALLED: {tool} path is missing or symlinked: {path}")
         for field in ("identity", "version", "license"):
             if not isinstance(raw.get(field), str) or not raw[field].strip():
@@ -91,13 +127,24 @@ def discover_external_runtimes(root: Path | None, tools: set[str] | frozenset[st
         required_files = raw.get("required_files", [])
         if not isinstance(required_files, list) or any(not isinstance(item, str) for item in required_files):
             raise DeMethFlowError(f"EXTERNAL_RUNTIME_CONTRACT_INVALID: {tool}.required_files must be a list")
-        checked_files: list[str] = []
+        declared_files = []
         for item in required_files:
             rel = _safe_relative(item, f"{tool}.required_files")
-            candidate = path / rel if path.is_dir() else path.parent / rel
+            declared_files.append(rel)
+        required = tuple(sorted(set((*TOOL_ENTRYPOINTS[tool], *declared_files))))
+        checked_files: list[str] = []
+        for rel in required:
+            candidate = path / rel
             if not candidate.is_file() or candidate.is_symlink():
                 raise DeMethFlowError(f"EXTERNAL_RUNTIME_NOT_INSTALLED: {tool} required file is missing: {candidate}")
             checked_files.append(rel)
+        content_sha256 = _content_digest(path, tuple(checked_files))
+        declared_digest = raw.get("content_sha256")
+        if declared_digest is not None:
+            if not isinstance(declared_digest, str) or len(declared_digest) != 64 or any(char not in "0123456789abcdef" for char in declared_digest.lower()):
+                raise DeMethFlowError(f"EXTERNAL_RUNTIME_CONTRACT_INVALID: {tool}.content_sha256 must be a SHA256 hex digest")
+            if declared_digest.lower() != content_sha256:
+                raise DeMethFlowError(f"EXTERNAL_RUNTIME_IDENTITY_MISMATCH: {tool} content_sha256 does not match required runtime files")
         found[tool] = ExternalRuntime(
             tool=tool,
             path=path,
@@ -105,6 +152,7 @@ def discover_external_runtimes(root: Path | None, tools: set[str] | frozenset[st
             version=raw["version"].strip(),
             license=raw["license"].strip(),
             required_files=tuple(checked_files),
+            content_sha256=content_sha256,
         )
     return found
 

@@ -11,9 +11,25 @@ import re
 from pathlib import Path, PurePosixPath
 
 try:
-    from .build_source_snapshot import EXCLUDE_PARTS, INCLUDE_DIRS, INCLUDE_FILES, INCLUDE_SCRIPTS, files as source_allowlist_files
+    from .build_source_snapshot import (
+        EXCLUDE_PARTS,
+        INCLUDE_DIRS,
+        INCLUDE_DOCUMENT_PREFIXES,
+        INCLUDE_DOCUMENTS,
+        INCLUDE_FILES,
+        INCLUDE_SCRIPTS,
+        files as source_allowlist_files,
+    )
 except ImportError:  # executing this file directly from scripts/
-    from build_source_snapshot import EXCLUDE_PARTS, INCLUDE_DIRS, INCLUDE_FILES, INCLUDE_SCRIPTS, files as source_allowlist_files
+    from build_source_snapshot import (
+        EXCLUDE_PARTS,
+        INCLUDE_DIRS,
+        INCLUDE_DOCUMENT_PREFIXES,
+        INCLUDE_DOCUMENTS,
+        INCLUDE_FILES,
+        INCLUDE_SCRIPTS,
+        files as source_allowlist_files,
+    )
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WHEEL = ROOT / "dist_conda_static_catalog_rc1_clean_helper_fix" / "methunmix-2.0.0rc1-py3-none-any.whl"
@@ -26,12 +42,21 @@ PACKAGE_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 # allowance. Updating it requires reviewing the source/wheel allowlists first.
 SIZE_ALLOWANCE_BYTES = 256 * 1024
 COMPRESSED_ALLOWANCE_BYTES = 64 * 1024
-# Measured after the resource-contract source commit, its regression tests,
-# and the portable release-audit tooling were added to the reviewed allowlist.
-# Keep the fixed allowances unchanged; future growth still requires review.
-SOURCE_UNCOMPRESSED_BASELINE = 1_796_440
-SOURCE_ARCHIVE_BASELINE = 439_945
-WHEEL_UNCOMPRESSED_BASELINE = 1_259_298
+# Measured from the reviewed dev9 PEP 517 sdist after the portable asset
+# verification and audit tests entered that distribution.  These are sdist
+# baselines, not source-snapshot baselines: snapshots have an exact Git-backed
+# member set checked separately below. Keep the fixed allowances unchanged;
+# future growth still requires review of actual members and sizes.
+SOURCE_UNCOMPRESSED_BASELINE = 2_129_036
+SOURCE_ARCHIVE_BASELINE = 507_194
+# The dev12 candidate adds only reviewed core-owned payload: the EDec and
+# EpiDISH descriptors, their conditional adapter-to-workflow translations,
+# and EpiDISH's three-variant output assessment.  Its primary PEP 517 wheel
+# measures 1,536,858 uncompressed bytes.  That is 6,352 bytes above the
+# reviewed dev11 wheel (1,530,506).  Record this exact measured baseline;
+# do not widen the fixed allowance, so later unrelated payload growth stays
+# gated and needs its own member-level review.
+WHEEL_UNCOMPRESSED_BASELINE = 1_536_858
 WHEEL_ARCHIVE_BASELINE = 398_963
 DIST_INFO_MEMBERS = {
     f"methunmix-{PACKAGE_VERSION}.dist-info/METADATA",
@@ -46,9 +71,19 @@ WHEEL_ASSET_SUFFIXES = {".nf", ".config", ".py", ".R", ".sh", ".txt", ".yml", ".
 WHEEL_NEXTFLOW_SUFFIXES = WHEEL_ASSET_SUFFIXES | {".md"}
 SOURCE_ASSET_SUFFIXES = WHEEL_ASSET_SUFFIXES | {".md", ".gitkeep"}
 SOURCE_SPECIAL_FILES = {
-    "src/methunmix_assets/deconvolution/wgbs_scripts/uxm",
     "src/methunmix_assets/deconvolution/wgbs_vendor/MetDecode/LICENSE",
     "src/methunmix_assets/nextflow_ref/condarc",
+}
+EXTERNALIZED_ALGORITHM_PATHS = {
+    "src/methunmix_assets/deconvolution/wgbs_scripts/celfie_run.py",
+    "src/methunmix_assets/deconvolution/wgbs_scripts/celfeer_bis.py",
+    "src/methunmix_assets/deconvolution/wgbs_scripts/celfeer_change.py",
+    "src/methunmix_assets/deconvolution/wgbs_scripts/celfeer_run.py",
+    "src/methunmix_assets/deconvolution/wgbs_scripts/celfeer_step1.sh",
+    "src/methunmix_assets/deconvolution/wgbs_scripts/celfeer_sum_reads_in_500_bins.py",
+    "src/methunmix_assets/deconvolution/wgbs_scripts/metdecode_run.py",
+    "src/methunmix_assets/deconvolution/wgbs_scripts/uxm",
+    "src/methunmix_assets/deconvolution/wgbs_scripts/uxm.sh",
 }
 
 
@@ -89,6 +124,55 @@ def expected_source_members() -> set[str]:
     return {prefix + path.relative_to(ROOT).as_posix() for path in source_allowlist_files()}
 
 
+def audit_source_snapshot(snapshot: Path, expected_members: set[str], reasons: list[str]) -> dict[str, object]:
+    """Check the deterministic source snapshot against its exact allowlist.
+
+    A PEP 517 sdist is allowed its narrowly defined generated metadata and
+    setuptools-selected file boundary.  The deterministic snapshot instead
+    has a Git-backed, exact source allowlist; do not conflate those contracts.
+    """
+    with tarfile.open(snapshot, "r:gz") as archive:
+        members = archive.getmembers()
+        names = [member.name for member in members]
+        files = [member for member in members if member.isfile()]
+        file_names = {member.name for member in files}
+        unsafe_paths = sorted(name for name in names if not safe_archive_path(name))
+        non_regular = sorted(member.name for member in members if not member.isfile() and not member.isdir())
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        unexpected = sorted(file_names - expected_members)
+        missing = sorted(expected_members - file_names)
+        forbidden = check_names(names)
+        if unsafe_paths:
+            reasons.append(f"unsafe paths in source snapshot: {unsafe_paths}")
+        if non_regular:
+            reasons.append(f"non-regular members in source snapshot: {non_regular[:20]}")
+        if duplicates:
+            reasons.append(f"duplicate source snapshot paths: {duplicates}")
+        if unexpected or missing:
+            reasons.append(f"source snapshot differs from exact reviewed allowlist; unexpected={unexpected[:20]}, missing={missing[:20]}")
+        if forbidden:
+            reasons.append(f"forbidden payload in source snapshot: {forbidden}")
+        return {
+            "path": str(snapshot), "sha256": sha256(snapshot), "members": len(names),
+            "files": len(file_names), "expected_files": len(expected_members),
+            "allowlist_status": "PASS" if not unsafe_paths and not non_regular and not duplicates and not unexpected and not missing and not forbidden else "FAIL",
+            "boundary": "exact Git-backed source-snapshot allowlist",
+        }
+
+
+def generated_sdist_member(name: str) -> bool:
+    """Allow only setuptools' normal metadata files, never arbitrary payload."""
+    parts = PurePosixPath(name).parts
+    if len(parts) < 2:
+        return False
+    relative = parts[1:]
+    if relative in (("PKG-INFO",), ("setup.cfg",)):
+        return True
+    return len(relative) == 3 and relative[0] == "src" and relative[1].endswith(".egg-info") and relative[2] in {
+        "PKG-INFO", "SOURCES.txt", "dependency_links.txt", "entry_points.txt", "top_level.txt",
+    }
+
+
 def allowed_source_member(name: str) -> bool:
     if not safe_archive_path(name):
         return False
@@ -102,17 +186,22 @@ def allowed_source_member(name: str) -> bool:
     if any(part in EXCLUDE_PARTS or part.endswith(".egg-info") for part in relative):
         return False
     relative_text = PurePosixPath(*relative).as_posix()
+    if relative_text in EXTERNALIZED_ALGORITHM_PATHS:
+        return False
     if "deconvolution/wgbs_vendor/" in relative_text or "deconvolution/vendor/prmeth_R/" in relative_text:
         return False
     if len(relative) == 1:
         return relative[0] in INCLUDE_FILES
     if relative[0] == "scripts":
         return relative_text in INCLUDE_SCRIPTS
+    if relative[0] == "docs":
+        return (
+            relative_text in INCLUDE_DOCUMENTS
+            or any(relative_text.startswith(prefix) for prefix in INCLUDE_DOCUMENT_PREFIXES)
+        ) and PurePosixPath(relative_text).suffix in {".md", ".json"}
     if relative[0] not in INCLUDE_DIRS:
         return False
     suffix = PurePosixPath(name).suffix
-    if relative[0] == "docs":
-        return suffix == ".md"
     if relative[0] == "tests":
         return suffix == ".py"
     if relative[0] == "src":
@@ -137,14 +226,23 @@ def allowed_wheel_member(name: str) -> bool:
             return True
         if len(relative) == 2 and relative[0] == "capabilities":
             return relative[1].endswith(".json")
+        if len(relative) == 3 and relative[0] == "capabilities" and relative[1] == "adapters":
+            # Declarative adapter descriptors are reviewed core metadata, not
+            # third-party algorithm payloads.  Keep this directory narrow so
+            # an arbitrary nested capability payload cannot enter the wheel.
+            return relative[2].endswith(".json")
         if len(relative) >= 2 and relative[0] == "assets":
             return relative[-1].endswith(".json")
         if len(relative) >= 2 and relative[0] == "deconvolution":
             relative_text = PurePosixPath(*relative).as_posix()
             if "deconvolution/wgbs_vendor/" in relative_text or "deconvolution/vendor/prmeth_R/" in relative_text:
                 return False
-            return Path(relative[-1]).suffix in WHEEL_ASSET_SUFFIXES or relative[-1] == "uxm"
+            if f"src/methunmix_assets/{relative_text}" in EXTERNALIZED_ALGORITHM_PATHS:
+                return False
+            return Path(relative[-1]).suffix in WHEEL_ASSET_SUFFIXES
         if len(relative) >= 2 and relative[0] == "nextflow_ref":
+            if relative == ("nextflow_ref", "condarc"):
+                return True
             return Path(relative[-1]).suffix in WHEEL_NEXTFLOW_SUFFIXES
         return False
     return name in DIST_INFO_MEMBERS
@@ -154,6 +252,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--wheel", type=Path, default=DEFAULT_WHEEL)
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
+    parser.add_argument("--source-snapshot", type=Path, help="optional deterministic source snapshot with an exact allowlist")
     parser.add_argument("--recipe", type=Path, default=DEFAULT_RECIPE)
     parser.add_argument(
         "--skip-recipe-binding",
@@ -167,7 +266,6 @@ def main() -> int:
     recipe_path = args.recipe.expanduser().resolve()
     reasons: list[str] = []
     evidence: dict[str, object] = {}
-    expected_source = expected_source_members()
     if not wheel.is_file():
         reasons.append(f"missing wheel: {wheel}")
     else:
@@ -209,23 +307,25 @@ def main() -> int:
         with tarfile.open(source, "r:gz") as archive:
             members = archive.getmembers()
             names = [member.name for member in members]
-            normalized_names = {name.removeprefix(f"methunmix-{PACKAGE_VERSION}/") for name in names}
+            files = [member for member in members if member.isfile()]
+            file_names = [member.name for member in files]
             unsafe_paths = sorted(name for name in names if not safe_archive_path(name))
-            outside_policy = sorted(name for name in names if not allowed_source_member(name))
-            unexpected = sorted(normalized_names - {name.removeprefix(f"methunmix-{PACKAGE_VERSION}/") for name in expected_source})
-            missing = sorted({name.removeprefix(f"methunmix-{PACKAGE_VERSION}/") for name in expected_source} - normalized_names)
-            non_regular = sorted(member.name for member in members if not member.isfile())
-            duplicates = sorted({name for name in names if names.count(name) > 1})
-            forbidden = check_names(names)
-            uncompressed_bytes = sum(member.size for member in members if member.isfile())
+            outside_policy = sorted(name for name in file_names if not generated_sdist_member(name) and not allowed_source_member(name))
+            non_regular = sorted(member.name for member in members if not member.isfile() and not member.isdir())
+            duplicates = sorted({name for name in file_names if file_names.count(name) > 1})
+            forbidden = check_names([name for name in file_names if not generated_sdist_member(name)])
+            uncompressed_bytes = sum(member.size for member in files)
             if forbidden:
                 reasons.append(f"forbidden payload in source archive: {forbidden}")
             if unsafe_paths:
                 reasons.append(f"unsafe paths in source archive: {unsafe_paths}")
             if outside_policy:
                 reasons.append(f"source archive members outside reviewed path/extension allowlist: {outside_policy[:20]}")
-            if unexpected or missing:
-                reasons.append(f"source archive differs from reviewed allowlist; unexpected={unexpected[:20]}, missing={missing[:20]}")
+            # A source snapshot has a different, deliberately narrower
+            # release-lineage boundary than an sdist.  The latter may include
+            # tests and omit release-audit helpers; enforce its own member
+            # allowlist above instead of treating that difference as payload
+            # corruption.
             if non_regular:
                 reasons.append(f"non-regular members in source archive: {non_regular[:20]}")
             if duplicates:
@@ -243,12 +343,19 @@ def main() -> int:
                 reasons.append(f"machine-specific absolute paths in source archive: {path_hits}")
             evidence["source"] = {
                 "path": str(source), "sha256": sha256(source), "members": len(names),
-                "allowlist_status": "PASS" if not unexpected and not missing and not unsafe_paths and not outside_policy and not non_regular and not duplicates and not forbidden else "FAIL",
+                "allowlist_status": "PASS" if not unsafe_paths and not outside_policy and not non_regular and not duplicates and not forbidden else "FAIL",
                 "uncompressed_bytes": uncompressed_bytes,
                 "uncompressed_limit_bytes": SOURCE_UNCOMPRESSED_BASELINE + SIZE_ALLOWANCE_BYTES,
                 "archive_bytes": source.stat().st_size,
                 "archive_limit_bytes": SOURCE_ARCHIVE_BASELINE + COMPRESSED_ALLOWANCE_BYTES,
+                "boundary": "PEP 517 sdist path/type allowlist plus narrow generated metadata",
             }
+    if args.source_snapshot:
+        snapshot = args.source_snapshot.expanduser().resolve()
+        if not snapshot.is_file():
+            reasons.append(f"missing source snapshot: {snapshot}")
+        else:
+            evidence["source_snapshot"] = audit_source_snapshot(snapshot, expected_source_members(), reasons)
     if args.skip_recipe_binding:
         evidence["recipe_binding"] = {
             "status": "PENDING_PUBLICATION",

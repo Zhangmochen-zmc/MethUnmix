@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import os
@@ -11,13 +12,18 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Mapping
 
 from . import NEXTFLOW_VERSION, PROJECT_ROOT, version
 from .errors import DeMethFlowError, ResolutionError
 from .celfeer import labels_from_manifest
+from .adapter_runtime import AdapterContext, adapter_for_tool
 from .epic_projection import CONTRACT as EPIC_FROM_450K_CONTRACT, project_inputs
 from .wgbs_projection import project_wgbs_inputs, target_platform_for_contract
 from .manifest import ReferenceBundle, is_native_wgbs_contract, is_wgbs_derived_array_contract
+from .offline_assets import verify_locked_external_runtimes, verify_locked_reference
+from .local_dependencies import is_runtime_module_kind, verify_runtime_binding_observations
+from .execution_lifecycle import RunLease, StepCache, inspect_resources, make_step_key, supervise_command
 from .runtime import (
     DoctorResult,
     doctor,
@@ -86,6 +92,48 @@ ARTIFACT_PARAMS = {
 CELFEER_OVERALL_TIMEOUT_SECONDS = 5400
 
 
+def _failure_classification(
+    execution_status: str | None,
+    *,
+    message: str | None = None,
+    exit_code: int | None = None,
+) -> dict[str, object]:
+    """Return a conservative stable failure class for manifests and summaries.
+
+    A non-zero workflow exit alone does not establish whether a tool,
+    container, filesystem, or input caused the failure.  Keep that condition
+    explicitly unclassified rather than guessing a scientific or operational
+    root cause from the exit code.
+    """
+    status = str(execution_status or "PREPARED")
+    text = str(message or "")
+    upper = text.upper()
+    if status in {"SUCCEEDED", "EXECUTION_SUCCESS", "PREPARED", "DRY_RUN"}:
+        category, confidence = "NONE", "NOT_APPLICABLE"
+    elif status == "TIMEOUT":
+        category, confidence = "TIMEOUT", "EXACT"
+    elif status == "OUTPUT_CONTRACT_FAILED":
+        category, confidence = "OUTPUT_CONTRACT", "EXACT"
+    elif any(token in upper for token in ("PERMISSION DENIED", "NO SPACE LEFT", "READ-ONLY FILE SYSTEM", "SOCKET OPERATION NOT PERMITTED")):
+        category, confidence = "INFRASTRUCTURE", "EXACT_MESSAGE"
+    elif any(token in upper for token in ("ASSET", "REFERENCE_", "WGBSTOOLS_REFERENCE", "CHECKSUM", "MODULE ")):
+        category, confidence = "ASSET", "EXACT_PREFIX"
+    elif any(token in upper for token in ("RUNTIME", "CONTAINER", "APPTAINER", "SINGULARITY")):
+        category, confidence = "RUNTIME", "EXACT_PREFIX"
+    elif any(token in upper for token in ("INPUT_", "BAM_", "PAT_", "SAMPLE_", "N>K")):
+        category, confidence = "INPUT_CONTRACT", "EXACT_PREFIX"
+    else:
+        category, confidence = "EXECUTION_FAILURE_UNCLASSIFIED", "INSUFFICIENT_EVIDENCE"
+    return {
+        "category": category,
+        "confidence": confidence,
+        "execution_status": status,
+        "exit_code": exit_code,
+        "message": text or None,
+        "scientific_status_promotion": "PROHIBITED",
+    }
+
+
 @dataclass
 class DeconRequest:
     input_path: Path
@@ -118,6 +166,12 @@ class DeconRequest:
     preprocess_threads: int = 4
     preprocess_sort_memory: str = "768M"
     bam_contig_policy: str = "strict"
+    asset_lock: dict | None = None
+    request_provenance: dict[str, object] | None = None
+    installation_dependency_plan: dict[str, object] | None = None
+    local_runtime_files: Mapping[str, Path] | None = None
+    step_cache_root: Path | None = None
+    workflow_timeout_seconds: int | None = None
 
 
 def _write_text_if_changed(path: Path, content: str) -> bool:
@@ -160,12 +214,23 @@ def prepare_decon(
         medecom_lambda=request.medecom_lambda,
         medecom_nfolds=request.medecom_nfolds,
         methylcibersort_permutations=request.methylcibersort_permutations,
+        preprocess_threads=request.preprocess_threads,
+        preprocess_sort_memory=request.preprocess_sort_memory,
+        bam_contig_policy=request.bam_contig_policy,
         analysis_contract=request.analysis_contract,
         allow_validation_candidate=request.validation_candidate,
+        isolated_reference_root=request.asset_lock is not None,
+        request_provenance=request.request_provenance,
+        check_mode="execution_preflight",
+        installation_dependency_plan=request.installation_dependency_plan,
+        local_runtime_files=request.local_runtime_files,
     )
     if not result.ok or not result.bundle or not result.nextflow_command:
         raise DeMethFlowError(_doctor_failure(result))
     bundle = result.bundle
+    if request.asset_lock is not None:
+        verify_locked_reference(request.asset_lock, bundle)
+        verify_locked_external_runtimes(request.asset_lock, request.external_runtime_root)
     outdir = request.outdir.expanduser().resolve()
     state_dir = outdir / ".demethflow"
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -249,20 +314,20 @@ def prepare_decon(
                 "--methylcibersort_sample_workers",
                 str(int(methylcibersort.get("sample_workers", 2))),
             ])
-    if "MeDeCom" in result.selected_tools:
-        medecom = result.execution_parameters.get("MeDeCom", {})
-        command.extend(["--medecom_k", str(medecom["k"])])
-        command.extend(["--medecom_lambda", str(medecom["lambda"])])
-        command.extend(["--medecom_nfolds", str(medecom.get("nfolds") or 0)])
-        command.extend([
-            "--medecom_output_contract",
-            result.bundle.tools["MeDeCom"].output_contract,
-        ])
     if "ARIC" in result.selected_tools:
         policy = result.bundle.tools["ARIC"].validation_policy or {}
         command.extend(["--aric_min_overlap", str(int(policy.get("minimum_overlap_cpg", 500)))])
     for tool in result.selected_tools:
         capability = bundle.tools[tool]
+        adapter = adapter_for_tool(tool)
+        if adapter is not None:
+            context = AdapterContext(
+                bundle, capability, tool, request.accelerator,
+                result.execution_parameters.get(tool, {}), result.external_runtime_paths.get(tool),
+            )
+            command.extend(adapter.execute_arguments(context))
+            result.adapter_execution[tool] = adapter.collect_provenance(context)
+            continue
         for artifact_name, parameter in ARTIFACT_PARAMS.get(tool, {}).items():
             if artifact_name in capability.artifacts:
                 command.extend([f"--{parameter}", str(bundle.artifact(tool, artifact_name))])
@@ -313,7 +378,6 @@ def prepare_decon(
         command.extend(["--src_prmeth", str(external_prmeth)])
     external_params = {
         "MetDecode": "tool_metdecode",
-        "CelFiE": "tool_celfie",
         "CelFEER": "tool_celfeer",
         "UXM": "tool_uxm",
     }
@@ -614,6 +678,59 @@ def _preprocess_failure_detail(root: Path) -> str:
     return "BAM_PREPROCESS_FAILED: BAM preprocessing Nextflow task failed"
 
 
+def _verify_launch_dependency_bindings(
+    installation_dependency_plan: dict[str, object] | None,
+    result: DoctorResult,
+) -> dict[str, object]:
+    """Recheck selected runtime files immediately before workflow launch.
+
+    The portable binding lock identifies logical runtime modules, while the
+    non-portable locator overlay is intentionally absent from run records.
+    Doctor has already resolved the actual runtime file for each selected
+    module; comparing that file to the recorded exact identity prevents a
+    plan/preflight observation from being treated as sufficient launch proof.
+    Non-runtime logical dependencies remain validated by the catalog-plan
+    resolver only: current workflows do not yet expose a generic selected
+    model/cache path that could be compared here.
+    """
+    if not installation_dependency_plan:
+        return {
+            "state": "NOT_REQUESTED",
+            "detail": "no catalog local-dependency plan was requested for this run",
+        }
+    state = installation_dependency_plan.get("state")
+    if state == "BLOCKED":
+        raise DeMethFlowError("PRELAUNCH_BINDING_FAILED: catalog dependency plan is blocked")
+    bindings = installation_dependency_plan.get("local_dependencies", [])
+    if not isinstance(bindings, list):
+        raise DeMethFlowError("PRELAUNCH_BINDING_FAILED: catalog local_dependencies must be a list")
+    runtime_bindings = [
+        row for row in bindings
+        if isinstance(row, dict) and is_runtime_module_kind(row.get("kind"))
+    ]
+    if any(not isinstance(row, dict) for row in bindings):
+        raise DeMethFlowError("PRELAUNCH_BINDING_FAILED: catalog local_dependencies contains an invalid entry")
+    checks = verify_runtime_binding_observations(runtime_bindings, result.runtime_files)
+    records = [
+        {"name": name, "status": "PASS" if ok else "FAIL", "detail": detail}
+        for name, ok, detail in checks
+    ]
+    failed = [item for item in records if item["status"] == "FAIL"]
+    if failed:
+        raise DeMethFlowError(
+            "PRELAUNCH_BINDING_FAILED: selected local runtime identity changed or was not resolved: "
+            + "; ".join(f"{item['name']}: {item['detail']}" for item in failed)
+        )
+    return {
+        "state": "VERIFIED_AT_LAUNCH" if runtime_bindings else "NO_RUNTIME_BINDINGS",
+        "checks": records,
+        "scope": (
+            "exact selected runtime module content immediately before workflow launch; "
+            "generic selected model/cache path binding is not yet implemented"
+        ),
+    }
+
+
 def run_decon(request: DeconRequest) -> dict:
     require_local_executor(request.executor)
     if not request.dry_run:
@@ -646,12 +763,48 @@ def run_decon(request: DeconRequest) -> dict:
         request, result, command, projection_report=result.projection_report,
         preprocess_report=preprocess_report,
     )
+    manifest["resource_preflight"] = inspect_resources(
+        [
+            ("outdir", outdir),
+            ("nextflow_home", Path(env["NXF_HOME"])),
+            ("nextflow_work", Path(env["NXF_WORK"])),
+            ("apptainer_cache", Path(env["APPTAINER_CACHEDIR"])),
+        ],
+        requested_cpus=max(1, request.preprocess_threads),
+        requested_concurrency=1,
+    )
     atomic_write_json(outdir / "run_manifest.json", manifest)
     _write_tool_status(outdir, result)
+    _write_result_summary(outdir, manifest, result)
     if request.dry_run:
         manifest["status"] = "DRY_RUN"
         atomic_write_json(outdir / "run_manifest.json", manifest)
+        _write_result_summary(outdir, manifest, result)
         return manifest
+    # ``prepare_decon`` validates catalog bindings during doctor, but an
+    # operator-controlled local runtime can still change while the remaining
+    # launch records are being prepared.  Rehash the *selected* runtime files
+    # immediately before constructing/starting the workflow.  This is a
+    # second fail-closed observation, not a claim that an arbitrary external
+    # writer cannot modify a file after it has been checked.
+    try:
+        manifest["launch_dependency_verification"] = _verify_launch_dependency_bindings(
+            request.installation_dependency_plan, result,
+        )
+    except DeMethFlowError as exc:
+        manifest.update(
+            status="FAILED",
+            execution_status="PRELAUNCH_BINDING_FAILED",
+            finished_at=_now(),
+            workflow_started=False,
+            failure_classification=_failure_classification(
+                "PRELAUNCH_BINDING_FAILED", message=str(exc), exit_code=None,
+            ),
+        )
+        atomic_write_json(outdir / "run_manifest.json", manifest)
+        _write_result_summary(outdir, manifest, result)
+        raise
+    atomic_write_json(outdir / "run_manifest.json", manifest)
     # Nextflow automatically prepends <projectDir>/bin to every task PATH.  Its
     # generated task wrapper does not safely quote that export when projectDir
     # contains whitespace. Execute a lightweight copy/symlink view from a
@@ -659,6 +812,10 @@ def run_decon(request: DeconRequest) -> dict:
     # below their project-scoped output; ordinary installations retain /tmp as
     # the portability default. A random bridge defeats Nextflow -resume.
     bridge = _persistent_workflow_bridge(outdir)
+    if request.step_cache_root is not None:
+        manifest["step_cache"] = _cache_workflow_identity(
+            request.step_cache_root, outdir=outdir, bridge=bridge,
+        )
     bridged_command = _bridge_workflow_command(command, bridge)
     manifest["executed_command"] = bridged_command
     manifest["execution_environment"] = {
@@ -672,7 +829,7 @@ def run_decon(request: DeconRequest) -> dict:
             CELFEER_OVERALL_TIMEOUT_SECONDS
             if is_native_wgbs_contract(result.bundle.contract)
             and "CelFEER" in result.selected_tools
-            else None
+            else request.workflow_timeout_seconds
         ),
         "proxy_variables_removed": not any(
             key.lower() in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
@@ -681,60 +838,120 @@ def run_decon(request: DeconRequest) -> dict:
     }
     atomic_write_json(outdir / "run_manifest.json", manifest)
     workflow_timeout = manifest["execution_environment"]["workflow_timeout_seconds"]
+    lease = RunLease(
+        outdir / ".demethflow" / "leases", modules=[],
+        identity={
+            "reference_digest": manifest.get("reference_digest"),
+            "input_identity": manifest.get("input_identity"),
+            "execution_plan_identity": manifest.get("execution_plan_identity"),
+        },
+    )
+    manifest["run_lease"] = {"path": str(lease.path), "state": "ACTIVE", "scope": "this run directory only"}
+    lease.open()
+    atomic_write_json(outdir / "run_manifest.json", manifest)
     if workflow_timeout is None:
         completed = subprocess.run(bridged_command, cwd=launch_dir, env=env, check=False)
     else:
-        # Start a dedicated process group so an overall timeout cannot leave a
-        # Nextflow/Apptainer descendant running after the CLI has returned.
-        process = subprocess.Popen(
-            bridged_command,
-            cwd=launch_dir,
-            env=env,
-            start_new_session=True,
+        receipt = supervise_command(
+            bridged_command, cwd=launch_dir, env=env, timeout_seconds=float(workflow_timeout),
+            receipt_path=outdir / ".demethflow" / "task_receipt.json",
+            attempt_identity={
+                "software_identity": manifest.get("software_identity"),
+                "execution_plan_identity": manifest.get("execution_plan_identity"),
+                "reference_digest": manifest.get("reference_digest"),
+                "input_identity": manifest.get("input_identity"),
+            },
+            task_scope={
+                "run_directory": str(outdir), "selected_tools": result.selected_tools,
+                "analysis_contract": result.bundle.contract,
+            },
         )
-        try:
-            process.wait(timeout=workflow_timeout)
-        except subprocess.TimeoutExpired:
-            manifest["status"] = "TIMEOUT"
-            manifest["execution_status"] = "TIMEOUT"
-            manifest["timeout_seconds"] = workflow_timeout
-            manifest["timeout_cleanup"] = "SIGTERM_PROCESS_GROUP_THEN_WAIT"
-            atomic_write_json(outdir / "run_manifest.json", manifest)
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait()
-            raise DeMethFlowError(
-                f"Nextflow exceeded the CelFEER overall timeout of {workflow_timeout}s; "
-                f"see {outdir}"
+        manifest["task_supervisor"] = receipt
+        receipt_persisted = receipt.get("receipt_write_status") == "PERSISTED"
+        if receipt["reason"] != "COMPLETED" or not receipt_persisted:
+            reason = str(receipt.get("reason"))
+            if reason == "TIMEOUT":
+                execution_status = "TIMEOUT"
+                message = f"workflow exceeded declared timeout of {workflow_timeout}s"
+            elif reason.startswith("INTERRUPTED"):
+                execution_status = "INTERRUPTED"
+                message = "workflow supervision was interrupted; see task supervisor attempt record"
+            elif reason == "LAUNCH_FAILED":
+                execution_status = "LAUNCH_FAILED"
+                message = "workflow process creation failed before a confirmed child handle was available"
+            else:
+                execution_status = "EXECUTION_RECORD_FAILED"
+                message = "workflow supervisor could not persist a terminal receipt"
+            manifest["status"] = "FAILED" if execution_status != "TIMEOUT" else "TIMEOUT"
+            manifest["execution_status"] = execution_status
+            manifest["timeout_seconds"] = workflow_timeout if execution_status == "TIMEOUT" else None
+            manifest["timeout_cleanup"] = receipt.get("cleanup_actions")
+            manifest["failure_classification"] = _failure_classification(
+                execution_status, message=message, exit_code=receipt.get("exit_code"),
             )
-        completed = subprocess.CompletedProcess(bridged_command, process.returncode)
+            if receipt.get("process_start_state") == "CONFIRMED_STARTED":
+                manifest["run_lease"] = lease.close(execution_status)
+            else:
+                manifest["run_lease"] = lease.mark_unknown(
+                    execution_status,
+                    reason="task supervisor did not confirm process creation; do not infer managed idleness",
+                )
+            atomic_write_json(outdir / "run_manifest.json", manifest)
+            _write_result_summary(outdir, manifest, result)
+            raise DeMethFlowError(
+                f"Nextflow supervision ended as {execution_status}; see {outdir}"
+            )
+        completed = subprocess.CompletedProcess(bridged_command, int(receipt.get("exit_code") or 0))
     manifest["finished_at"] = _now()
     manifest["exit_code"] = completed.returncode
+    manifest["run_lease"] = lease.close("EXECUTION_SUCCESS" if completed.returncode == 0 else "EXECUTION_FAILED")
     if completed.returncode != 0:
         manifest["status"] = "FAILED"
         manifest["execution_status"] = "FAILED"
+        manifest["failure_classification"] = _failure_classification(
+            "FAILED", message="Nextflow returned a non-zero exit code", exit_code=completed.returncode,
+        )
         atomic_write_json(outdir / "run_manifest.json", manifest)
+        _write_result_summary(outdir, manifest, result)
         raise DeMethFlowError(f"Nextflow failed with exit code {completed.returncode}; see {outdir}")
-    reference_free = separate_reference_free_outputs(outdir, result)
-    cell_tools = [
-        tool for tool in result.selected_tools
-        if result.bundle.tools[tool].output_contract == "cell_proportions_v1"
-    ]
-    canonical = canonicalize_outputs(outdir, result.bundle) if cell_tools else []
+    try:
+        reference_free = separate_reference_free_outputs(outdir, result)
+        cell_tools = [
+            tool for tool in result.selected_tools
+            if result.bundle.tools[tool].output_contract == "cell_proportions_v1"
+        ]
+        canonical = canonicalize_outputs(outdir, result.bundle) if cell_tools else []
+    except DeMethFlowError as exc:
+        # A successful Nextflow process is not a successful MethUnMix run if
+        # its declared output cannot be validated/canonicalized.  Preserve the
+        # original output files for diagnosis, but make the terminal manifest
+        # and per-tool summary truthful rather than leaving them PREPARED.
+        manifest["status"] = "FAILED"
+        manifest["execution_status"] = "OUTPUT_CONTRACT_FAILED"
+        manifest["finished_at"] = _now()
+        manifest["failure_classification"] = _failure_classification(
+            "OUTPUT_CONTRACT_FAILED", message=str(exc), exit_code=completed.returncode,
+        )
+        atomic_write_json(outdir / "run_manifest.json", manifest)
+        _write_result_summary(outdir, manifest, result)
+        raise
     manifest["canonical_outputs"] = [str(path) for path in canonical]
     manifest["reference_free_outputs"] = [str(path) for path in reference_free]
+    # Keep output identities in the terminal run record as well as the
+    # per-tool summary.  ``run_manifest.json`` itself is intentionally not
+    # included: hashing it here would create a self-referential digest.
+    manifest["output_identities"] = {
+        "canonical": [_path_evidence(path) for path in canonical],
+        "reference_free": [_path_evidence(path) for path in reference_free],
+        "scope": "validated terminal deconvolution outputs; excludes self-referential run_manifest.json",
+    }
     manifest["status"] = "SUCCEEDED"
     manifest["execution_status"] = "SUCCEEDED"
+    manifest["failure_classification"] = _failure_classification(
+        "SUCCEEDED", exit_code=completed.returncode,
+    )
     atomic_write_json(outdir / "run_manifest.json", manifest)
+    _write_result_summary(outdir, manifest, result, canonical=canonical, reference_free=reference_free)
     return manifest
 
 
@@ -1153,9 +1370,17 @@ def _initial_run_manifest(
         item["tool"] for item in result.skipped_tools
         if item.get("status") not in {"EXPLICIT_ONLY", "READY", "RELEASED_UNVALIDATED"}
     ]
+    input_identity = _input_identity(request.input_path)
+    input_digest = str(input_identity.get("sha256") or input_identity.get("tree_digest"))
+    input_sha256 = input_identity.get("sha256") if input_identity.get("type") == "file" else None
+    execution_plan = {
+        **result.execution_plan,
+        "output_directory": str(request.outdir.expanduser().resolve()),
+    }
     return {
         "schema": "demethflow-run-v2",
         "core_version": version(),
+        "software_identity": _software_identity(),
         "nextflow_version": NEXTFLOW_VERSION,
         "mode": "decon",
         "status": "PREPARED",
@@ -1209,8 +1434,13 @@ def _initial_run_manifest(
         "accelerator": request.accelerator,
         "random_seed": request.random_seed,
         "input": str(request.input_path.expanduser().resolve()),
-        "input_digest": _input_digest(request.input_path),
-        "input_sha256": sha256_file(request.input_path) if request.input_path.is_file() else None,
+        "input_digest": input_digest,
+        "input_sha256": input_sha256,
+        # ``input_digest`` has always been a full content identity: SHA256 for
+        # one file and a deterministic SHA256 tree digest for a directory.  Do
+        # not present it as a cheap path/stat shortcut.  The explicit object
+        # is additive so old consumers of the two legacy fields keep working.
+        "input_identity": input_identity,
         "selected_tools": result.selected_tools,
         "selected_released_unvalidated_tools": selected_ru,
         "explicit_only_skipped_tools": explicit_only_skipped,
@@ -1229,6 +1459,7 @@ def _initial_run_manifest(
             }
             for tool in result.selected_tools
         },
+        "adapter_execution": result.adapter_execution,
         "skipped_tools": result.skipped_tools,
         "container_engine": result.container_engine,
         "runtime_images": {
@@ -1246,8 +1477,77 @@ def _initial_run_manifest(
         },
         "reference_qc": reference_qc,
         "resolved_execution_parameters": result.execution_parameters,
+        # This is the same selection/preflight object exposed by
+        # ``methunmix doctor --json``.  Additive output-location context keeps
+        # the public run manifest self-contained without creating a second
+        # route-selection implementation.
+        "execution_plan": execution_plan,
+        "execution_plan_identity": _json_identity(
+            execution_plan,
+            scope="canonical JSON representation of the recorded execution plan",
+        ),
+        "execution_plan_semantic_identity": result.execution_plan.get("semantic_identity"),
+        "resolved_analysis_request": request.request_provenance or execution_plan.get("effective_request"),
+        "installation_dependency_plan": request.installation_dependency_plan or (
+            execution_plan.get("dependencies", {}).get("installation_dependency_plan")
+            if isinstance(execution_plan.get("dependencies"), dict) else None
+        ),
         "command": command,
         "doctor": result_as_dict(result),
+    }
+
+
+def _software_identity() -> dict[str, object]:
+    """Record provenance plus portable execution content for retry checks."""
+    from .software_identity import current_software_identity
+
+    return current_software_identity()
+
+
+def _json_identity(payload: object, *, scope: str) -> dict[str, str]:
+    """Return a stable identity for a JSON-compatible provenance object.
+
+    This is deliberately an identity of the object as recorded, rather than
+    a cache key.  In particular, the plan's input and output locations remain
+    part of the digest, so an auditor can establish exactly what was launched.
+    """
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return {
+        "algorithm": "sha256",
+        "canonicalization": "json-sort-keys-utf8-separators-v1",
+        "scope": scope,
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+
+
+def _input_identity(path: Path) -> dict[str, object]:
+    """Describe a full input identity without inventing a quick-digest claim."""
+    resolved = path.expanduser().resolve()
+    if resolved.is_file():
+        return {
+            "type": "file",
+            "algorithm": "sha256",
+            "sha256": sha256_file(resolved),
+            "bytes": resolved.stat().st_size,
+            "quick_identity": None,
+            "identity_scope": "full file content",
+        }
+    files = [item for item in sorted(resolved.rglob("*")) if item.is_file()]
+    return {
+        "type": "directory",
+        "algorithm": "sha256-tree-v1",
+        "tree_digest": stable_digest(
+            (item.relative_to(resolved).as_posix(), sha256_file(item)) for item in files
+        ),
+        "file_count": len(files),
+        "bytes": sum(item.stat().st_size for item in files),
+        "quick_identity": None,
+        "identity_scope": "full recursive file content",
     }
 
 
@@ -1282,6 +1582,254 @@ def _data_module_evidence(exports: dict[str, Path]) -> dict[str, object]:
             for name, evidence in summarized.items()
         ),
     }
+
+
+def _selected_tool_output(
+    *,
+    outdir: Path,
+    tool: str,
+    output_contract: str,
+    canonical: list[Path],
+    reference_free: list[Path],
+    run_status: str,
+    failure_message: str | None = None,
+) -> dict[str, object]:
+    """Describe one selected tool without inferring scientific accuracy.
+
+    Canonicalization/reference-free validation is responsible for deciding
+    whether an output is structurally valid.  This function only reports
+    whether that validated output was produced for the named selected tool;
+    it makes a partial workflow result visible instead of silently treating
+    the whole run as evidence for every tool.
+    """
+    variant_names = {
+        "EMeth": {
+            "Normal": "EMeth_Normal_results.csv",
+            "Laplace": "EMeth_Laplace_results.csv",
+        },
+        # RUN_EpiDISH deterministically invokes all three established methods
+        # and 450k_main.nf gives each standardized result its own canonical
+        # method tag.  Do not collapse those alternatives into an invented
+        # single EpiDISH_results.csv.
+        "EpiDISH": {
+            "RPC": "EpiDISH_RPC_results.csv",
+            "CBS": "EpiDISH_CBS_results.csv",
+            "CP": "EpiDISH_CP_results.csv",
+        },
+    }.get(tool)
+    if run_status != "SUCCEEDED":
+        if variant_names:
+            variants: dict[str, object] = {}
+            for variant, filename in variant_names.items():
+                invalid = bool(failure_message and filename in failure_message)
+                variants[variant] = {
+                    "expected_output": str(outdir / "canonical" / filename),
+                    "execution_status": "OUTPUT_CONTRACT_FAILED" if invalid else run_status,
+                    "output_contract_status": "INVALID" if invalid else "NOT_ASSESSED",
+                    "outputs": [],
+                    "reason": failure_message if invalid else "run did not reach a successful canonical-output summary",
+                }
+            return {
+                "execution_status": run_status,
+                "output_contract_status": "INVALID" if any(
+                    item["output_contract_status"] == "INVALID" for item in variants.values()
+                ) else "NOT_ASSESSED",
+                "outputs": [],
+                "variants": variants,
+            }
+        return {
+            "execution_status": run_status,
+            "output_contract_status": "NOT_ASSESSED",
+            "outputs": [],
+        }
+    if variant_names:
+        variants: dict[str, object] = {}
+        all_outputs: list[dict[str, object]] = []
+        missing: list[str] = []
+        invalid: list[str] = []
+        for variant, filename in variant_names.items():
+            matches = [path for path in canonical if path.name == filename]
+            expected = str(outdir / "canonical" / filename)
+            if len(matches) == 1:
+                output = _path_evidence(matches[0])
+                variants[variant] = {
+                    "expected_output": expected,
+                    "execution_status": "EXECUTION_SUCCESS",
+                    "output_contract_status": "CONFORMANT",
+                    "outputs": [output],
+                    "reason": "validated canonical output present",
+                }
+                all_outputs.append(output)
+            elif not matches:
+                missing.append(variant)
+                variants[variant] = {
+                    "expected_output": expected,
+                    "execution_status": "SUCCEEDED_WITHOUT_DECLARED_OUTPUT",
+                    "output_contract_status": "MISSING",
+                    "outputs": [],
+                    "reason": f"validated canonical output is absent: {filename}",
+                }
+            else:
+                invalid.append(variant)
+                variants[variant] = {
+                    "expected_output": expected,
+                    "execution_status": "SUCCEEDED_WITH_INVALID_DECLARED_OUTPUT",
+                    "output_contract_status": "INVALID",
+                    "outputs": [_path_evidence(path) for path in matches],
+                    "reason": f"ambiguous duplicate validated canonical outputs: {filename}",
+                }
+        if not missing and not invalid:
+            return {
+                "execution_status": "EXECUTION_SUCCESS",
+                "output_contract_status": "CONFORMANT",
+                "outputs": all_outputs,
+                "variants": variants,
+            }
+        affected = [*missing, *invalid]
+        return {
+            "execution_status": (
+                "SUCCEEDED_WITH_INVALID_DECLARED_OUTPUT" if invalid else "SUCCEEDED_WITHOUT_DECLARED_OUTPUT"
+            ),
+            "output_contract_status": "INVALID" if invalid else "MISSING",
+            "outputs": all_outputs,
+            # Keep the previous singular compatibility field for consumers
+            # that display one expected path, while also exposing the complete
+            # tool-specific multi-variant contract.
+            "expected_output": variants[affected[0]]["expected_output"],
+            "expected_outputs": [item["expected_output"] for item in variants.values()],
+            "missing_variants": missing,
+            "invalid_variants": invalid,
+            "reason": f"{tool} requires all declared validated outputs; affected variants: {', '.join(affected)}",
+            "variants": variants,
+        }
+    expected_name = f"{tool}_results.csv"
+    if output_contract == "cell_proportions_v1":
+        matches = [path for path in canonical if path.name == expected_name]
+    else:
+        matches = [
+            path for path in reference_free
+            if path.name == expected_name or tool.lower() in str(path).lower()
+        ]
+    if not matches:
+        return {
+            "execution_status": "SUCCEEDED_WITHOUT_DECLARED_OUTPUT",
+            "output_contract_status": "MISSING",
+            "outputs": [],
+            "expected_output": (
+                str(outdir / "canonical" / expected_name)
+                if output_contract == "cell_proportions_v1"
+                else str(outdir / "reference_free" / expected_name)
+            ),
+        }
+    return {
+        "execution_status": "EXECUTION_SUCCESS",
+        "output_contract_status": "CONFORMANT",
+        "outputs": [_path_evidence(path) for path in matches],
+    }
+
+
+def _write_result_summary(
+    outdir: Path,
+    manifest: dict,
+    result: DoctorResult,
+    *,
+    canonical: list[Path] | None = None,
+    reference_free: list[Path] | None = None,
+) -> dict[str, object]:
+    """Write an additive, per-tool result/provenance summary.
+
+    The summary is deliberately not a validation engine.  It preserves the
+    reference-declared READY/RU disclosure and explicitly states that runtime
+    truth metrics are absent unless a future declared truth-input contract
+    supplies them.  Existing canonical outputs, `tool_status.tsv`, and
+    `run_manifest.json` remain unchanged.
+    """
+    canonical = canonical or []
+    reference_free = reference_free or []
+    bundle = result.bundle
+    run_status = str(manifest.get("execution_status", manifest.get("status", "PREPARED")))
+    classification = manifest.get("failure_classification")
+    failure_message = classification.get("message") if isinstance(classification, dict) else None
+    selected: dict[str, object] = {}
+    if bundle is not None:
+        for tool in result.selected_tools:
+            capability = bundle.tools[tool]
+            status, reason = capability.effective_status(result.accelerator)
+            selected[tool] = {
+                "selected": True,
+                "profile": result.accelerator,
+                "declared_status": status,
+                "declared_reason": reason,
+                "output_contract": capability.output_contract,
+                "release_disclosure": result.release_disclosures.get(tool),
+                **_selected_tool_output(
+                    outdir=outdir,
+                    tool=tool,
+                    output_contract=capability.output_contract,
+                    canonical=canonical,
+                    reference_free=reference_free,
+                    run_status=run_status,
+                    failure_message=failure_message,
+                ),
+            }
+            adapter = adapter_for_tool(tool)
+            if adapter is not None:
+                selected[tool]["adapter"] = {
+                    **(result.adapter_execution.get(tool) or {}),
+                    "output_assessment": adapter.assess_output(
+                        output_contract=capability.output_contract,
+                        output=selected[tool],
+                    ),
+                }
+    skipped = {
+        str(item.get("tool")): {
+            "selected": False,
+            "execution_status": "NOT_SELECTED",
+            "selection_status": item.get("status"),
+            "reason": item.get("reason"),
+            "release_disclosure": result.release_disclosures.get(str(item.get("tool"))),
+        }
+        for item in result.skipped_tools
+    }
+    summary = {
+        "schema": "methunmix-result-summary-v1",
+        "execution_status": run_status,
+        "failure_classification": manifest.get("failure_classification") or _failure_classification(run_status),
+        "scientific_status": "OBSERVATIONAL_ONLY_NO_PROMOTION",
+        "scope": "per-tool execution/output/provenance summary; no runtime scientific accuracy claim",
+        "provenance": {
+            "core_version": manifest.get("core_version"),
+            "reference_selector": (
+                f"{manifest.get('reference_id')}@{manifest.get('reference_version')}"
+                if manifest.get("reference_id") and manifest.get("reference_version") else None
+            ),
+            "reference_digest": manifest.get("reference_digest"),
+            "input": manifest.get("input"),
+            "input_digest": manifest.get("input_digest"),
+            "input_sha256": manifest.get("input_sha256"),
+            "input_identity": manifest.get("input_identity"),
+            "analysis_contract": manifest.get("analysis_contract"),
+            "genome_build": manifest.get("genome_build"),
+            "accelerator": manifest.get("accelerator"),
+            "random_seed": manifest.get("random_seed"),
+            "runtime_images": manifest.get("runtime_images", {}),
+            "data_modules": manifest.get("data_modules", {}),
+            "execution_plan_schema": (manifest.get("execution_plan") or {}).get("schema"),
+            "execution_plan_identity": manifest.get("execution_plan_identity"),
+            "bam_materialization": manifest.get("wgbs_bam_preprocess"),
+            "platform_projection": manifest.get("platform_projection"),
+            "output_identities": manifest.get("output_identities"),
+        },
+        "tools": {**selected, **skipped},
+        "truth_metrics": {
+            "status": "NOT_COMPUTED_NO_RUNTIME_TRUTH_INPUT",
+            "metrics": None,
+            "reason": "ordinary deconvolution input has no declared truth-proportion contract",
+        },
+        "route_limitations": (manifest.get("scientific_validation_disclosure") or {}).get("warning"),
+    }
+    atomic_write_json(outdir / "result_summary.json", summary)
+    return summary
 
 
 def _write_tool_status(outdir: Path, result: DoctorResult) -> None:
@@ -1430,6 +1978,36 @@ def _persistent_workflow_bridge(outdir: Path) -> Path:
     return bridge
 
 
+def _cache_workflow_identity(cache_root: Path, *, outdir: Path, bridge: Path) -> dict[str, object]:
+    """Cache a deterministic workflow-source receipt, never a model result.
+
+    The small receipt is a real production artifact used to bind a materialized
+    bridge to its source digest.  It deliberately does not cache user inputs,
+    preprocessing outputs, reference data, or algorithm output; those require
+    their own route-specific identity and validation contracts.
+    """
+    source = (PROJECT_ROOT / "deconvolution").resolve()
+    source_digest = _workflow_source_digest(source)
+    key = make_step_key(
+        step="workflow-source-receipt-v1",
+        identities={"workflow_source": str(source), "workflow_source_digest": source_digest},
+        parameters={"bridge_contract": "demethflow-workflow-bridge-v1"},
+    )
+    cache = StepCache(cache_root)
+    hit = cache.lookup(str(key["sha256"]))
+    if hit["status"] == "HIT":
+        return {"enabled": True, "kind": "workflow_source_receipt", "key": key, "lookup": hit}
+    state = outdir / ".demethflow" / "workflow_source_receipt.json"
+    atomic_write_json(state, {
+        "schema": "methunmix-workflow-source-receipt-v1",
+        "workflow_source": str(source), "workflow_source_digest": source_digest,
+        "bridge": str(bridge), "key": key,
+        "scope": "deterministic bridge provenance only; no scientific/model result is cached",
+    })
+    published = cache.publish(str(key["sha256"]), state)
+    return {"enabled": True, "kind": "workflow_source_receipt", "key": key, "lookup": hit, "publish": published}
+
+
 def _workflow_source_digest(source: Path) -> str:
     files = [
         child for child in sorted(source.rglob("*"))
@@ -1455,18 +2033,6 @@ def _native_input_dirs(path: Path) -> tuple[Path, Path]:
     bed = resolved / "bed" if (resolved / "bed").is_dir() else resolved
     pat = resolved / "pat" if (resolved / "pat").is_dir() else resolved
     return bed, pat
-
-
-def _input_digest(path: Path) -> str:
-    resolved = path.expanduser().resolve()
-    if resolved.is_file():
-        return sha256_file(resolved)
-    pairs = [
-        (item.relative_to(resolved).as_posix(), sha256_file(item))
-        for item in sorted(resolved.rglob("*"))
-        if item.is_file()
-    ]
-    return stable_digest(pairs)
 
 
 def _profile_engine(result: DoctorResult, runtime: str) -> str:

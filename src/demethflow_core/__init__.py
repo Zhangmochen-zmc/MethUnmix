@@ -1,7 +1,8 @@
-"""Core library for the standalone, offline MethUnmix distribution.
+"""Core library for the standalone, offline MethUnMix distribution.
 
 The historical ``demethflow_core`` import path is intentionally retained for
-2.x compatibility.  Runtime resources are kept in the separate
+serialized-record and Python-import compatibility.  It is not a public CLI
+name. Runtime resources are kept in the separate
 ``methunmix_assets`` package so an installed wheel/Conda package never relies
 on a source checkout layout.
 """
@@ -9,7 +10,7 @@ on a source checkout layout.
 from importlib.resources import files
 from pathlib import Path
 
-PACKAGE_NAME = "MethUnmix"
+PACKAGE_NAME = "MethUnMix"
 CORE_API = "2.0"
 REFERENCE_SCHEMA = "1.0"
 RUNTIME_API = "1.0"

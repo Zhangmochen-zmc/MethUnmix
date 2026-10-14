@@ -427,8 +427,9 @@ process RUN_MeDeCom {
             path "raw_model.rds"
             path "input_samples.tsv"
             path "MeDeCom_metadata.json"
+            path "medecom_external_diagnostics"
             path "${sample_id}_benchmark.csv", emit: bench
-    script: "medecom_decon.R --mix '$mix' --cohort_id '$sample_id' --k '${params.medecom_k}' --lambda '${params.medecom_lambda}' --nfolds '${params.medecom_nfolds}' --ncores '${task.cpus}' --seed '${params.random_seed}'"
+    script: "bash \"${projectDir}/bin/capture_external_diagnostics.sh\" --stage medecom_external_r --output medecom_external_diagnostics -- medecom_decon.R --mix '$mix' --cohort_id '$sample_id' --k '${params.medecom_k}' --lambda '${params.medecom_lambda}' --nfolds '${params.medecom_nfolds}' --ncores '${task.cpus}' --seed '${params.random_seed}'"
 }
 
 process POST_PROCESS_MEDECOM_V1 {

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import errno
 import os
 import sys
 import tarfile
@@ -43,8 +45,83 @@ class MethUnmixControlPlaneTests(unittest.TestCase):
         self.assertNotIn("    menet.py predict", wgbs_main)
 
     def test_resource_root_and_version(self):
-        self.assertEqual(version(), "2.0.0rc2")
+        self.assertEqual(version(), "1.0.0")
         self.assertTrue((PROJECT_ROOT / "deconvolution" / "wgbs_preprocess.nf").is_file())
+
+    def test_public_cli_brand_and_version(self):
+        from demethflow_core.cli import build_parser
+
+        parser = build_parser()
+        with self.assertRaises(SystemExit) as raised, redirect_stdout(StringIO()) as output:
+            parser.parse_args(["--version"])
+        self.assertEqual(raised.exception.code, 0)
+        self.assertEqual(output.getvalue(), "MethUnMix 1.0.0\n")
+
+    def test_current_release_version_identities_are_bound_and_fail_closed(self):
+        from scripts.audit_version_identity import audit
+
+        current = audit()
+        self.assertEqual(current["status"], "PASS")
+        self.assertEqual(current["core_version"], version())
+        self.assertEqual(current["public_cli_contract"]["primary_entry"], "demethflow_core.cli:main")
+        self.assertFalse(current["public_cli_contract"]["demethflow_entry_present"])
+        self.assertTrue(current["public_cli_contract"]["internal_import_path_retained"])
+
+        with tempfile.TemporaryDirectory(prefix="methunmix-version-identity-") as temporary:
+            root = Path(temporary)
+            (root / "src/methunmix_assets/capabilities").mkdir(parents=True)
+            (root / "src/methunmix_assets/assets").mkdir(parents=True)
+            (root / "src/demethflow_core").mkdir(parents=True)
+            (root / "VERSION").write_text("2.0.0rc3\n", encoding="utf-8")
+            (root / "src/methunmix_assets/VERSION").write_text("2.0.0rc3\n", encoding="utf-8")
+            (root / "pyproject.toml").write_text(
+                "[project]\nversion = '2.0.0rc3'\n[project.scripts]\nmethunmix = 'demethflow_core.cli:main'\n",
+                encoding="utf-8",
+            )
+            (root / "src/methunmix_assets/capabilities/capability_registry.json").write_text(
+                json.dumps({"software_version": "2.0.0rc2"}), encoding="utf-8"
+            )
+            (root / "src/methunmix_assets/assets/catalog.json").write_text(
+                json.dumps({"core_version": "2.0.0rc3"}), encoding="utf-8"
+            )
+            mismatched = audit(root, "2.0.0rc3")
+            self.assertEqual(mismatched["status"], "FAIL")
+            self.assertTrue(any("identities disagree" in issue for issue in mismatched["issues"]))
+
+    def test_catalog_snapshot_identity_is_independent_but_schema_is_fail_closed(self):
+        from scripts.audit_version_identity import audit
+
+        with tempfile.TemporaryDirectory(prefix="methunmix-catalog-version-identity-") as temporary:
+            root = Path(temporary)
+            (root / "src/methunmix_assets/capabilities").mkdir(parents=True)
+            (root / "src/methunmix_assets/assets").mkdir(parents=True)
+            (root / "src/demethflow_core").mkdir(parents=True)
+            for path in (root / "VERSION", root / "src/methunmix_assets/VERSION"):
+                path.write_text("2.1.0.dev9\n", encoding="utf-8")
+            (root / "pyproject.toml").write_text(
+                "[project]\nversion = '2.1.0.dev9'\n[project.scripts]\nmethunmix = 'demethflow_core.cli:main'\n",
+                encoding="utf-8",
+            )
+            (root / "src/methunmix_assets/capabilities/capability_registry.json").write_text(
+                json.dumps({"software_version": "2.1.0.dev9"}), encoding="utf-8"
+            )
+            catalog_path = root / "src/methunmix_assets/assets/catalog.json"
+            valid_catalog = {
+                "schema": "methunmix-static-catalog-v1", "product": "MethUnmix",
+                "core_version": "2.1.0.dev7", "catalog_release": "frozen-static.1",
+                "catalog_sequence": 1, "trust_model": "HTTPS_STATIC_CATALOG_SHA256", "targets": [],
+            }
+            catalog_path.write_text(json.dumps(valid_catalog), encoding="utf-8")
+            independent = audit(root, "2.1.0.dev9")
+            self.assertEqual(independent["status"], "PASS")
+            self.assertEqual(independent["sources"]["embedded_catalog"]["value"], "2.1.0.dev7")
+            self.assertFalse(independent["sources"]["embedded_catalog"]["core_version_match_required"])
+
+            valid_catalog["schema"] = "unknown-static-catalog-v99"
+            catalog_path.write_text(json.dumps(valid_catalog), encoding="utf-8")
+            unsupported = audit(root, "2.1.0.dev9")
+            self.assertEqual(unsupported["status"], "FAIL")
+            self.assertTrue(any("unsupported embedded catalog schema" in issue for issue in unsupported["issues"]))
 
     def test_methylbert_fix_process_passes_declared_output_without_placeholder(self):
         workflow = (PROJECT_ROOT / "deconvolution" / "wgbs_main.nf").read_text(encoding="utf-8")
@@ -122,27 +199,75 @@ class MethUnmixControlPlaneTests(unittest.TestCase):
         self.assertEqual(catalog["empty_catalog_policy"]["fallback"], "USER_SUPPLIED_SUPPORTED_OR_BLOCKED")
 
     def test_package_payload_audit_rejects_private_paths_and_build_bytecode(self):
-        from scripts.audit_conda_payload import allowed_source_member, allowed_wheel_member, check_names, safe_archive_path, scan_private_paths
-        from scripts.build_source_snapshot import files as source_allowlist_files
+        from scripts.audit_conda_payload import allowed_source_member, allowed_wheel_member, check_names, generated_sdist_member, safe_archive_path, scan_private_paths
+        from scripts import build_source_snapshot
+        from scripts.build_source_snapshot import EXCLUDE_TEST_PATHS, files as source_allowlist_files
+        source_prefix = f"methunmix-{version()}"
         self.assertTrue(check_names(["pkg/__pycache__/tool.cpython-312.pyc"]))
         hits = scan_private_paths([
             ("pkg/helper.py", b'ROOT = "' + b"/data/" + b"zhangmch" + b'/private-worktree"'),
             ("pkg/readme.txt", b"generic relative path only"),
         ])
         self.assertEqual(hits, ["pkg/helper.py"])
-        self.assertTrue(safe_archive_path("methunmix-2.0.0rc2/src/module.py"))
-        self.assertFalse(safe_archive_path("methunmix-2.0.0rc2/../../outside"))
-        self.assertFalse(safe_archive_path(r"methunmix-2.0.0rc2\src\module.py"))
-        self.assertTrue(allowed_source_member("methunmix-2.0.0rc2/src/methunmix_assets/nextflow_ref/tools/.gitkeep"))
-        self.assertTrue(allowed_source_member("methunmix-2.0.0rc2/src/methunmix_assets/deconvolution/wgbs_scripts/uxm"))
-        self.assertFalse(allowed_source_member("methunmix-2.0.0rc2/src/methunmix.egg-info/PKG-INFO"))
+        self.assertTrue(safe_archive_path(f"{source_prefix}/src/module.py"))
+        self.assertFalse(safe_archive_path(f"{source_prefix}/../../outside"))
+        self.assertFalse(safe_archive_path(source_prefix + r"\src\module.py"))
+        self.assertTrue(allowed_source_member(f"{source_prefix}/src/methunmix_assets/nextflow_ref/tools/.gitkeep"))
+        self.assertFalse(allowed_source_member(f"{source_prefix}/src/methunmix_assets/deconvolution/wgbs_scripts/uxm"))
+        self.assertFalse(allowed_source_member(f"{source_prefix}/docs/WORK_ITEM_REGISTER.json"))
+        self.assertTrue(allowed_source_member(f"{source_prefix}/docs/PUBLIC_USER_GUIDE.md"))
+        self.assertTrue(allowed_source_member(f"{source_prefix}/docs/REFERENCE_INSTALLATION_GUIDE.md"))
+        self.assertTrue(allowed_source_member(f"{source_prefix}/docs/REFERENCE_INSTALLATION_GUIDE_zh-CN.md"))
+        self.assertTrue(allowed_source_member(f"{source_prefix}/docs/publication/PUBLICATION_SCOPE_DRAFT.md"))
+        self.assertFalse(allowed_source_member(f"{source_prefix}/docs/unreviewed.json"))
+        self.assertFalse(allowed_source_member(f"{source_prefix}/src/methunmix.egg-info/PKG-INFO"))
+        self.assertTrue(generated_sdist_member(f"{source_prefix}/PKG-INFO"))
+        self.assertTrue(generated_sdist_member(f"{source_prefix}/src/methunmix.egg-info/SOURCES.txt"))
+        self.assertFalse(generated_sdist_member(f"{source_prefix}/src/methunmix.egg-info/extra-model.sif"))
+        self.assertFalse(generated_sdist_member(f"{source_prefix}/src/methunmix.egg-info/payload.py"))
+        self.assertFalse(generated_sdist_member(f"{source_prefix}/unexpected.egg-info/PKG-INFO"))
+        self.assertFalse(safe_archive_path(f"{source_prefix}/../escape"))
+        self.assertFalse(safe_archive_path(f"/{source_prefix}/src/module.py"))
         self.assertTrue(allowed_wheel_member("demethflow_core/cli.py"))
         self.assertTrue(allowed_wheel_member("methunmix_assets/assets/catalog.json"))
+        self.assertTrue(allowed_wheel_member("methunmix_assets/nextflow_ref/condarc"))
         self.assertFalse(allowed_wheel_member("unexpected/payload.py"))
         self.assertFalse(allowed_wheel_member("methunmix_assets/runtimes/tool.sif"))
+        self.assertFalse(allowed_wheel_member("methunmix_assets/deconvolution/wgbs_scripts/celfeer_run.py"))
         self.assertTrue(check_names(["src/methunmix.egg-info/PKG-INFO"]))
         self.assertFalse(allowed_wheel_member("methunmix_assets/methunmix.egg-info/PKG-INFO"))
-        self.assertFalse(any(any(part.endswith(".egg-info") for part in path.parts) for path in source_allowlist_files()))
+        # This unit test checks allowlist semantics, not repository cleanliness.
+        # RC qualification separately requires a clean Git worktree before it
+        # produces a real source artifact.
+        with patch.object(build_source_snapshot, "tracked_paths", return_value=None):
+            selected_source_paths = source_allowlist_files()
+        selected_names = {path.relative_to(build_source_snapshot.ROOT).as_posix() for path in selected_source_paths}
+        self.assertFalse(any(any(part.endswith(".egg-info") for part in path.parts) for path in selected_source_paths))
+        self.assertIn("scripts/audit_reference_lifecycle_declarations.py", selected_names)
+        self.assertIn("scripts/audit_work_item_register.py", selected_names)
+        self.assertIn("tests/test_reference_public_catalog.py", EXCLUDE_TEST_PATHS)
+        self.assertFalse(any(path.relative_to(build_source_snapshot.ROOT).as_posix() in EXCLUDE_TEST_PATHS for path in selected_source_paths))
+
+    def test_source_snapshot_audit_rejects_disguised_payload_and_link(self):
+        from scripts.audit_conda_payload import audit_source_snapshot
+
+        prefix = f"methunmix-{version()}"
+        with tempfile.TemporaryDirectory(prefix="methunmix-payload-negative-") as temporary:
+            archive_path = Path(temporary) / "malicious.tar.gz"
+            with tarfile.open(archive_path, "w:gz") as archive:
+                disguised = tarfile.TarInfo(f"{prefix}/src/methunmix.egg-info/extra-model.sif")
+                disguised.size = 4
+                archive.addfile(disguised, io.BytesIO(b"SIF!"))
+                link = tarfile.TarInfo(f"{prefix}/README.md")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "/etc/passwd"
+                archive.addfile(link)
+            reasons: list[str] = []
+            result = audit_source_snapshot(archive_path, {f"{prefix}/README.md"}, reasons)
+            self.assertEqual(result["allowlist_status"], "FAIL")
+            self.assertTrue(any("non-regular" in reason for reason in reasons))
+            self.assertTrue(any("unexpected" in reason for reason in reasons))
+            self.assertTrue(any("forbidden payload" in reason for reason in reasons))
 
     def test_wheel_normalization_removes_build_timestamp_variance(self):
         import zipfile
@@ -477,7 +602,7 @@ class MethUnmixControlPlaneTests(unittest.TestCase):
             link = root / "linked-store"
             link.symlink_to(outside, target_is_directory=True)
             with patch.dict(os.environ, {"METHUNMIX_HOME": str(link / "new-store")}, clear=True):
-                with self.assertRaisesRegex(DeMethFlowError, "symlink in MethUnmix managed path"):
+                with self.assertRaisesRegex(DeMethFlowError, "symlink in MethUnMix managed path"):
                     prepare_data_home()
             with patch.dict(os.environ, {"METHUNMIX_HOME": str(link / ".." / "dotdot-store")}, clear=True):
                 with self.assertRaisesRegex(DeMethFlowError, "must not contain '..'"):
@@ -517,6 +642,54 @@ class MethUnmixControlPlaneTests(unittest.TestCase):
             self.assertEqual(ModuleStore(root).verify(module), [])
             (module.install_root / "unexpected.txt").write_text("tampered\n", encoding="utf-8")
             self.assertIn("undeclared: unexpected.txt", ModuleStore(root).verify(module))
+
+    def test_cross_filesystem_commit_failure_preserves_existing_effective_module(self):
+        """Staging is deliberately below the store root; an unexpected EXDEV
+        at the final atomic move must leave the already usable version intact.
+
+        This is a fault-injection test.  It does not rely on two real mounted
+        file systems, and it verifies the failure behaviour that a caller sees.
+        """
+        from demethflow_core.release import _build_module_archive
+
+        with tempfile.TemporaryDirectory(prefix="methunmix-cross-fs-commit-") as tmp:
+            root = Path(tmp)
+            store_root = root / "store"
+            first_source = root / "first.txt"
+            second_source = root / "second.txt"
+            first_source.write_text("first\n", encoding="utf-8")
+            second_source.write_text("second\n", encoding="utf-8")
+            first_archive = root / "first.tar.gz"
+            second_archive = root / "second.tar.gz"
+            _build_module_archive(
+                first_archive, module_id="fixture-module", module_type="tool-data",
+                module_version="1.0.0", sources=[(first_source, "fixture.txt")],
+            )
+            _build_module_archive(
+                second_archive, module_id="fixture-module", module_type="tool-data",
+                module_version="2.0.0", sources=[(second_source, "fixture.txt")],
+            )
+            store = ModuleStore(store_root)
+            installed, changed = store.install(first_archive)
+            self.assertTrue(changed)
+            self.assertEqual(installed.selector, "fixture-module@1.0.0")
+
+            original_replace = os.replace
+
+            def fail_only_payload_commit(source, destination):
+                if Path(source).name == "payload":
+                    raise OSError(errno.EXDEV, "simulated cross-device commit")
+                return original_replace(source, destination)
+
+            with patch("demethflow_core.modules.os.replace", side_effect=fail_only_payload_commit):
+                with self.assertRaisesRegex(InstallError, "cross-device"):
+                    store.install(second_archive)
+
+            retained = store.find("fixture-module")
+            self.assertIsNotNone(retained)
+            self.assertEqual(retained.selector, "fixture-module@1.0.0")
+            self.assertEqual(store.verify(retained), [])
+            self.assertIsNone(next((item for item in store.list() if item.selector == "fixture-module@2.0.0"), None))
 
     def test_reference_export_is_noarch_and_importable_on_non_linux_host(self):
         with tempfile.TemporaryDirectory(prefix="methunmix-test-") as tmp:
@@ -679,7 +852,7 @@ class MethUnmixControlPlaneTests(unittest.TestCase):
             archive.with_name(archive.name + ".sha256").write_text(
                 hashlib.sha256(archive.read_bytes()).hexdigest() + "\n", encoding="utf-8"
             )
-            with self.assertRaisesRegex(InstallError, "symlink in MethUnmix managed path"):
+            with self.assertRaisesRegex(InstallError, "symlink in MethUnMix managed path"):
                 ModuleStore(link / "nested-home").install(archive)
             with self.assertRaisesRegex(InstallError, "must not contain '..'"):
                 ModuleStore(link / ".." / "dotdot-home").install(archive)
@@ -709,7 +882,7 @@ class MethUnmixControlPlaneTests(unittest.TestCase):
             )
             link = root / "linked.tar.gz"
             link.symlink_to(target)
-            with self.assertRaisesRegex(InstallError, "symlink in MethUnmix managed path"):
+            with self.assertRaisesRegex(InstallError, "symlink in MethUnMix managed path"):
                 ModuleStore(root / "home").install(link)
 
     def test_archive_case_collisions_are_rejected_before_extraction(self):
@@ -927,12 +1100,18 @@ class MethUnmixControlPlaneTests(unittest.TestCase):
             legacy_part = downloads / f".{digest}.part"
             legacy_part.symlink_to(sentinel)
             with patch.dict(os.environ, {"METHUNMIX_HOME": str(Path(tmp) / "home"), "METHUNMIX_CATALOG_PATH": str(catalog_path)}), \
+                 patch("demethflow_core.asset_manager.urllib.request.urlopen") as urlopen:
+                with self.assertRaises(DeMethFlowError):
+                    fetch_asset("fixture")
+                urlopen.assert_not_called()
+                self.assertEqual(sentinel.read_bytes(), b"must remain unchanged")
+            legacy_part.unlink()
+            with patch.dict(os.environ, {"METHUNMIX_HOME": str(Path(tmp) / "home"), "METHUNMIX_CATALOG_PATH": str(catalog_path)}), \
                  patch("demethflow_core.asset_manager.urllib.request.urlopen", return_value=Response()):
                 self.assertEqual(fetch_asset("fixture"), 0)
                 fetched = Path(tmp) / "home" / ".methunmix" / "downloads" / digest
                 self.assertEqual(fetched.read_bytes(), payload)
                 self.assertEqual(sentinel.read_bytes(), b"must remain unchanged")
-                self.assertTrue(legacy_part.is_symlink())
                 fetched.unlink()
                 fetched.symlink_to(sentinel)
                 with patch("demethflow_core.asset_manager.urllib.request.urlopen") as urlopen:

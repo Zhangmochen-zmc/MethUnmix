@@ -1,0 +1,47 @@
+# NON-SUBMITTABLE TEMPLATE — public source and recipe maintainer are unbound.
+{% set name = "methunmix" %}
+{% set version = "1.0.0" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  # Keep null until an explicitly authorized public source object exists.
+  url: null
+  sha256: null
+
+build:
+  number: 0
+  noarch: python
+  script: "{{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation"
+  entry_points:
+    - methunmix = demethflow_core.cli:main
+
+requirements:
+  host:
+    - python
+    - pip
+    - setuptools >=68
+    - wheel
+  run:
+    - python >=3.10,<3.14
+    - nextflow >=26.04.4,<26.05
+    - openjdk >=17,<18
+
+test:
+  commands:
+    - methunmix --version
+    - methunmix adapter validate --json
+
+about:
+  home: https://github.com/Zhangmochen-zmc/MethUnmix
+  license: "MIT"
+  license_file:
+    - LICENSE
+    - NOTICE
+  summary: "Offline DNA methylation deconvolution workflow core"
+
+extra:
+  # A Bioconda account has not been selected or authorized.
+  recipe-maintainers: []

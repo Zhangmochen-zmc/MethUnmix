@@ -1,0 +1,24 @@
+name: prepublication-core-checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-24.04
+    steps:
+      # actions/checkout v4.2.2, pinned to its immutable commit.  This
+      # workflow has no publish token, release job, upload step, or asset fetch.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Show interpreter
+        run: python3 --version
+      - name: Lightweight unit and contract tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: Build artifacts
+        run: python3 -m pip wheel --no-deps --wheel-dir dist . && python3 -m pip install build && python3 -m build --sdist --outdir dist .
+      - name: Audit public-core preparation only
+        run: python3 scripts/check_prepublication.py --wheel dist/*.whl --sdist dist/*.tar.gz --mode preparation --output prepublication-check.json

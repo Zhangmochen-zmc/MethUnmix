@@ -4,12 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "methunmix"
-version = "2.0.0rc2"
+version = "1.0.0"
 description = "Offline DNA methylation deconvolution workflow"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 license = {file = "LICENSE"}
-authors = [{name = "MethUnmix contributors"}]
+authors = [
+  {name = "Mochen Zhang"},
+  {name = "Xiangyu Yu"},
+  {name = "Yaoke Wei"},
+]
+maintainers = [
+  {name = "Mochen Zhang", email = "zhangmochen@big.ac.cn"},
+]
 dependencies = []
 keywords = ["DNA methylation", "deconvolution", "Nextflow", "WGBS", "450K", "EPIC"]
 classifiers = [
@@ -18,9 +25,13 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Zhangmochen-zmc/MethUnmix"
+Repository = "https://github.com/Zhangmochen-zmc/MethUnmix"
+Issues = "https://github.com/Zhangmochen-zmc/MethUnmix/issues"
+
 [project.scripts]
 methunmix = "demethflow_core.cli:main"
-demethflow = "demethflow_core.legacy:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -38,15 +49,16 @@ methunmix_assets = [
   "VERSION",
   "ASSET_BOUNDARY.txt",
   "capabilities/*.json",
+  "capabilities/adapters/*.json",
   "assets/**/*.json",
   "deconvolution/*.nf",
   "deconvolution/*.config",
   "deconvolution/array_pro/*.py",
   "deconvolution/bin/*.py",
   "deconvolution/bin/*.R",
+  "deconvolution/bin/*.sh",
   "deconvolution/wgbs_scripts/*.py",
   "deconvolution/wgbs_scripts/*.sh",
-  "deconvolution/wgbs_scripts/uxm",
   "nextflow_ref/**/*.nf",
   "nextflow_ref/**/*.config",
   "nextflow_ref/**/*.py",
@@ -56,10 +68,20 @@ methunmix_assets = [
   "nextflow_ref/**/*.yaml",
   "nextflow_ref/**/*.json",
   "nextflow_ref/README.md",
+  "nextflow_ref/condarc",
 ]
 
 [tool.setuptools.exclude-package-data]
 methunmix_assets = [
   "deconvolution/wgbs_vendor/**",
   "deconvolution/vendor/prmeth_R/**",
+  "deconvolution/wgbs_scripts/celfie_run.py",
+  "deconvolution/wgbs_scripts/celfeer_bis.py",
+  "deconvolution/wgbs_scripts/celfeer_change.py",
+  "deconvolution/wgbs_scripts/celfeer_run.py",
+  "deconvolution/wgbs_scripts/celfeer_step1.sh",
+  "deconvolution/wgbs_scripts/celfeer_sum_reads_in_500_bins.py",
+  "deconvolution/wgbs_scripts/metdecode_run.py",
+  "deconvolution/wgbs_scripts/uxm",
+  "deconvolution/wgbs_scripts/uxm.sh",
 ]

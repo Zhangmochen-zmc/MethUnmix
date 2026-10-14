@@ -1,0 +1,47 @@
+{
+  "schema": "methunmix-adapter-descriptor-v1",
+  "adapter_id": "edec-array-v1",
+  "tool": "EDec",
+  "workflow_family": "array-supervised-tref",
+  "supported_analysis_contracts": [
+    "array_450k_cpg",
+    "array_epic_cpg",
+    "array_epic_from_450k_common_cpg_v1",
+    "wgbs_derived_epic_cpg_v1",
+    "wgbs_derived_450k_cpg_v1"
+  ],
+  "input_representations": ["array_matrix", "projected_array_matrix"],
+  "reference_requirement": "required",
+  "runtime_requirement": "manifest_declared",
+  "sample_constraint": "single_or_multi_sample",
+  "output_contracts": ["cell_proportions_v1"],
+  "operations": [
+    "validate_input",
+    "prepare_input",
+    "execute",
+    "parse_output",
+    "validate_output",
+    "collect_provenance"
+  ],
+  "provenance_fields": [
+    "input_identity",
+    "reference_identity",
+    "runtime_identity",
+    "parameters",
+    "output_identity",
+    "release_disclosure"
+  ],
+  "adapter_api_version": "1",
+  "supported_profiles": ["cpu", "gpu"],
+  "parameter_semantics": [
+    "reference_artifact:tref=>--ref_edec_tref (preferred materialized reference)",
+    "reference_artifact:reference_data+metadata=>--ref_edec_data,--ref_edec_meta (PREP_EDec fallback when tref is absent)",
+    "reference_artifact:markers=>--ref_edec_mark (required in both branches)",
+    "random_seed:workflow_global"
+  ],
+  "model_requirements": [],
+  "cacheable_steps": [],
+  "recovery_semantics": "no_adapter_output_cache; workflow_source_receipt_only",
+  "error_classes": ["INPUT_CONTRACT", "RUNTIME_CONTRACT", "REFERENCE_CONTRACT", "OUTPUT_CONTRACT", "ADAPTER_API_INCOMPATIBLE"],
+  "scientific_disclosure_source": "reference_manifest_release_disclosure"
+}

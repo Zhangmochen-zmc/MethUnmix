@@ -192,7 +192,11 @@ class ModuleStore:
                         if metadata_path.is_file():
                             installed = read_json(metadata_path)
                             if installed.get("archive_sha256") == archive_sha and destination.is_dir():
-                                return InstalledModule(metadata_path, installed), False
+                                current = InstalledModule(metadata_path, installed)
+                                integrity_errors = self.verify(current)
+                                if integrity_errors:
+                                    raise InstallError(f"Installed module {current.selector} failed current integrity verification: " + "; ".join(integrity_errors[:4]))
+                                return current, False
                             raise InstallError(
                                 f"Refusing to overwrite {payload['module_id']}@{payload['version']} with different content"
                             )
@@ -251,6 +255,104 @@ class ModuleStore:
             if "bytes" in entry and path.stat().st_size != entry["bytes"]:
                 errors.append(f"size mismatch: {entry['path']}")
         return errors
+
+    def retire_exact(self, module_id: str, version: str) -> dict[str, object]:
+        """Remove one current-store registration by moving it to recovery trash.
+
+        This is deliberately not a recursive deletion API.  The exact current
+        module payload and its registration are moved together under the same
+        local store lock so a caller can inspect/recover the retired bytes.
+        Legacy read-compatible stores are never changed by this method.
+        """
+        try:
+            module_id = validate_id(module_id, "module_id")
+            version = validate_id(version, "version")
+            assert_no_symlink_components(self.root)
+        except ManifestError as exc:
+            raise InstallError(str(exc)) from exc
+        current = [
+            module for module in self.list()
+            if module.module_id == module_id and module.version == version
+            and module.manifest_path.parent == self.meta_root
+        ]
+        legacy = [
+            module for module in self.list()
+            if module.module_id == module_id and module.version == version
+            and module.manifest_path.parent != self.meta_root
+        ]
+        if not current:
+            if legacy:
+                raise InstallError(
+                    f"{module_id}@{version} is registered only in a legacy store; "
+                    "MethUnMix will not mutate a legacy installation"
+                )
+            raise InstallError(f"Installed module not found in the active store: {module_id}@{version}")
+        if len(current) != 1:
+            raise InstallError(f"Ambiguous active-store registrations for {module_id}@{version}")
+
+        with _store_lock(self.root / ".methunmix" / "store.lock", operation=f"retire:{module_id}@{version}"):
+            metadata_path = self.meta_root / f"{module_id}@{version}.json"
+            if metadata_path.is_symlink() or not metadata_path.is_file():
+                raise InstallError(f"Module registration changed or is unsafe: {metadata_path}")
+            try:
+                payload = read_json(metadata_path)
+                payload = _validate_module_payload(payload)
+            except ManifestError as exc:
+                raise InstallError(f"Cannot validate active module registration {metadata_path}: {exc}") from exc
+            if payload.get("module_id") != module_id or payload.get("version") != version:
+                raise InstallError(f"Module registration identity changed while retiring: {metadata_path}")
+            expected_root = self._destination(payload)
+            declared_root = Path(str(payload.get("installed_path", "")))
+            if declared_root != expected_root:
+                raise InstallError("Refusing to retire a module whose declared installed_path is not its managed destination")
+            if expected_root.is_symlink():
+                raise InstallError(f"Refusing to retire a symlinked module payload: {expected_root}")
+            if expected_root.exists() and not expected_root.is_dir():
+                raise InstallError(f"Module payload path is not a directory: {expected_root}")
+            trash_root = self.root / ".methunmix" / "trash"
+            self._ensure_store_directory(trash_root)
+            transaction = trash_root / f"retired-{time.time_ns()}-{module_id}@{version}"
+            transaction.mkdir(mode=0o700)
+            payload_target = transaction / "payload"
+            metadata_target = transaction / "module.json"
+            moved_payload = False
+            moved_metadata = False
+            try:
+                if expected_root.exists():
+                    os.replace(expected_root, payload_target)
+                    moved_payload = True
+                    fsync_directory(expected_root.parent)
+                os.replace(metadata_path, metadata_target)
+                moved_metadata = True
+                fsync_directory(metadata_path.parent)
+                atomic_write_json(transaction / "retirement.json", {
+                    "schema": "methunmix-retired-module-v1",
+                    "module_id": module_id,
+                    "version": version,
+                    "retired_at": time.time(),
+                    "previous_install_root": str(expected_root),
+                    "registration_archive_sha256": payload.get("archive_sha256"),
+                    "payload_present_at_retirement": moved_payload,
+                    "recovery_scope": "local inspection/recovery only; no automatic garbage collection",
+                })
+                fsync_directory(transaction)
+            except OSError as exc:
+                # Best-effort rollback preserves the active registration when
+                # a filesystem failure occurs midway through the retirement.
+                try:
+                    if moved_metadata and not metadata_path.exists():
+                        os.replace(metadata_target, metadata_path)
+                    if moved_payload and not expected_root.exists():
+                        os.replace(payload_target, expected_root)
+                except OSError:
+                    pass
+                raise InstallError(f"Could not safely retire {module_id}@{version}: {exc}") from exc
+        return {
+            "selector": f"{module_id}@{version}",
+            "status": "RETIRED_TO_RECOVERY_QUARANTINE",
+            "recovery_path": str(transaction),
+            "payload_present": moved_payload,
+        }
 
     def _destination(self, payload: dict) -> Path:
         module_id = payload["module_id"]

@@ -30,6 +30,10 @@ HM450_CONTRACT = "wgbs_derived_450k_cpg_v1"
 CONTRACTS = {EPIC_CONTRACT: "epic", HM450_CONTRACT: "450k"}
 PROJECTION_SCHEMA = "demethflow-wgbs-derived-array-projection-v1"
 RUN_SCHEMA = "demethflow-wgbs-derived-array-projection-run-v1"
+# This is deliberately independent of the report schema.  Bump it whenever a
+# change can alter materialized values while retaining the same input and
+# reference declarations.  Old reports are then never silently reused.
+PROJECTION_IMPLEMENTATION_VERSION = "1"
 COORDINATE_SYSTEM = "0_based_half_open_bed_v1"
 _CG = re.compile(r"^cg[0-9]+$")
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -310,6 +314,8 @@ def project_wgbs_inputs(
     assets = load_wgbs_projection_assets(bundle, selected)
     samples = _read_wgbs_samples(input_path, assets)
     report = _projection_report(bundle, assets, samples, selected)
+    report["projection_implementation_version"] = PROJECTION_IMPLEMENTATION_VERSION
+    report["projection_cache_identity"] = _projection_cache_identity(bundle, report, selected)
     if report["status"] != "PASS":
         raise DeMethFlowError(_projection_failure(report))
     cached = _cached_projection(bundle, report, output_root, resume)
@@ -359,6 +365,8 @@ def project_wgbs_inputs(
         "reference": bundle.selector,
         "reference_digest": bundle.content_digest(),
         "selected_tools": list(selected),
+        "projection_implementation_version": PROJECTION_IMPLEMENTATION_VERSION,
+        "projection_cache_identity": report["projection_cache_identity"],
         "mapping": {"path": str(assets.mapping_path), "sha256": sha256_file(assets.mapping_path)},
         "coordinate_system": COORDINATE_SYSTEM,
         "automatic_coordinate_shift": False,
@@ -786,6 +794,8 @@ def _cached_projection(bundle: ReferenceBundle, report: dict, root: Path, resume
         cached.get("schema") != RUN_SCHEMA
         or cached.get("reference") != bundle.selector
         or cached.get("reference_digest") != bundle.content_digest()
+        or cached.get("projection_implementation_version") != PROJECTION_IMPLEMENTATION_VERSION
+        or cached.get("projection_cache_identity") != report.get("projection_cache_identity")
         or observed != previous
         or not (root / "nextflow_inputs" / "cohort.csv").is_file()
     ):
@@ -796,6 +806,43 @@ def _cached_projection(bundle: ReferenceBundle, report: dict, root: Path, resume
         raise DeMethFlowError("projection resume output digest mismatch")
     cached["cache_reused"] = True
     return cached
+
+
+def _projection_cache_identity(bundle: ReferenceBundle, report: dict, selected: tuple[str, ...]) -> str:
+    """Return the immutable resume identity for a materialized projection.
+
+    The content digest binds declared reference artifacts.  The remaining
+    values bind route semantics that can otherwise change without an input
+    path changing: coordinate contract, projection implementation, mapping,
+    tool-specific overlap gate and sample order.  JSON is used instead of
+    :func:`stable_digest` because legitimate sample identifiers can be Unicode.
+    """
+    mapping = report.get("mapping")
+    inputs = report.get("inputs")
+    if not isinstance(mapping, dict) or not isinstance(inputs, list):
+        raise DeMethFlowError("projection cache identity requires validated mapping and input provenance")
+    payload = {
+        "run_schema": RUN_SCHEMA,
+        "projection_schema": PROJECTION_SCHEMA,
+        "projection_implementation_version": PROJECTION_IMPLEMENTATION_VERSION,
+        "analysis_contract": bundle.contract,
+        "reference": bundle.selector,
+        "reference_digest": bundle.content_digest(),
+        "target_platform": report.get("target_platform"),
+        "genome_build": report.get("genome_build"),
+        "coordinate_system": report.get("coordinate_system"),
+        "automatic_coordinate_shift": report.get("automatic_coordinate_shift"),
+        "liftover": report.get("liftover"),
+        "missing_cpg_imputation": report.get("missing_cpg_imputation"),
+        "mapping_sha256": mapping.get("sha256"),
+        "selected_tools": list(selected),
+        "inputs": [
+            {"sample_id": item.get("sample_id"), "input_sha256": item.get("input_sha256")}
+            for item in inputs
+        ],
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _write_probe_table(path: Path, rows: Iterable[tuple[str, str]]) -> None:

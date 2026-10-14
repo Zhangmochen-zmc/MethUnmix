@@ -1,0 +1,51 @@
+{
+  "schema": "methunmix-publication-pending-decisions-v1",
+  "status": "REFERENCE_LICENSE_AND_SOFTWARE_TARGETS_RECORDED_PUBLIC_ACTIONS_NOT_AUTHORIZED",
+  "decided": [
+    {
+      "id": "software-authors-contact-license-rightsholder",
+      "status": "OWNER_DECLARED",
+      "record": "OWNER_DECISIONS_2026-10-12.json"
+    },
+    {
+      "id": "thirty-derived-reference-distribution",
+      "status": "OWNER_APPROVED_DISTRIBUTION",
+      "binding_sha256": "8f641feee00962f9605eb92ede71e6dafda3413f6c814c2c66707a1d19d336bc",
+      "record": "OWNER_DECISIONS_2026-10-12.json"
+    },
+    {
+      "id": "reference-noncommercial-policy",
+      "status": "LICENSE_POLICY_NONCOMMERCIAL_CONFIRMED",
+      "record": "OWNER_DECISIONS_2026-10-12.json"
+    },
+    {
+      "id": "reference-standard-license",
+      "status": "OWNER_SELECTED_CC_BY_NC_4_0",
+      "record": "OWNER_DECISIONS_2026-10-12_LICENSE_TARGETS.json"
+    },
+    {
+      "id": "software-github-and-biocode-targets",
+      "status": "TARGETS_RECORDED_ACTIONS_NOT_AUTHORIZED",
+      "github": "https://github.com/Zhangmochen-zmc/MethUnmix",
+      "biocode_entry_id": null,
+      "record": "OWNER_DECISIONS_2026-10-12_LICENSE_TARGETS.json"
+    }
+  ],
+  "pending": [
+    {
+      "id": "reference-rightsholder-and-object-upstream-terms",
+      "status": "RIGHTS_AND_COMPONENT_TERMS_PENDING",
+      "impact_if_deferred": "affected archive license closure and public download remain blocked"
+    },
+    {
+      "id": "reference-hosting-platform",
+      "status": "PLATFORM_UNSPECIFIED",
+      "impact_if_deferred": "reference URLs remain null and references remain not public-downloadable"
+    },
+    {
+      "id": "public-actions",
+      "status": "PUBLIC_ACTION_NOT_AUTHORIZED",
+      "impact_if_deferred": "tag, push, upload, draft, release, publish and PR remain not executed"
+    }
+  ]
+}
