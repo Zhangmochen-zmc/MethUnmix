@@ -65,11 +65,12 @@ class UserGuideExampleTests(unittest.TestCase):
                 self.assertNotIn("no current catalog URL is active", text)
                 self.assertNotIn("当前 catalog URL 仍为空", text)
 
-    def test_candidate_status_is_not_misrepresented_as_stable_release(self):
+    def test_same_version_artifact_identity_is_not_misrepresented(self):
         root = Path(__file__).resolve().parents[1]
         readme = (root / "README.md").read_text(encoding="utf-8")
-        self.assertIn("unpublished local fixed candidate", readme.lower())
-        self.assertIn("fixed-1.0.0-candidate.1-20261014", readme)
+        self.assertIn("artifact identity", readme.lower())
+        self.assertIn("owner-reviewed release manifest", readme)
+        self.assertNotIn("unpublished local fixed candidate", readme.lower())
         self.assertIn("1.0.0", readme)
         self.assertIn("cf15a70e53fa3ecae2d940b90b919a0643724d38b48098d2a1532dabdda16133", readme)
 

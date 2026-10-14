@@ -1,7 +1,7 @@
 # MethUnMix reference 安装指南——catalog 1.0.0
 
 本指南适用于外置 candidate.6 catalog 与尚未发布的 MethUnMix 修复后 1.0.0
-core 候选 `fixed-1.0.0-candidate.1-20261014`；它不同于现有直链中的旧 1.0.0
+owner 审阅的 release manifest 所指向的修复版 1.0.0 core artifact；它不同于现有直链中的旧 1.0.0
 wheel。Core 与 reference 版本相互独立：升级 core 不会静默替换 reference，发布
 reference 也不会改变科学状态。
 

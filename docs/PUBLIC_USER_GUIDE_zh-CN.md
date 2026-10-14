@@ -1,26 +1,39 @@
-# MethUnMix 用户指南——1.0.0 修复后本地候选
+# MethUnMix 用户指南——1.0.0 修复版 artifact
 
-> 状态：**尚未发布的修复后本地候选。** 本文适用于
-> `fixed-1.0.0-candidate.1-20261014`，不适用于现有直链中不同字节的旧
-> 1.0.0 wheel；它不是稳定发行公告、科学验证通过结论或 READY/RU 状态变更。
+> artifact 内容身份是权威依据。本文适用于 owner 审阅的 release manifest 所指向
+> 的修复版 1.0.0，不适用于现有直链中不同字节的旧 1.0.0 wheel；仅凭版本字符串
+> 无法区分二者。本文不是科学验证通过结论或 READY/RU 状态变更。
 
 MethUnMix 是面向 DNA 甲基化解卷积的离线优先控制层：它选择路线、检查用户提供
 的输入与外置资产、调用满足条件的 workflow，并记录 provenance。core 不包含
 reference archive、SIF/container、模型权重、genome cache、原始输入或第三方算法实现。
 
+以下同版本旧对象仅为保持 provenance 而原样保留：
+
+```text
+https://download.cncb.ac.cn/methbank/MethUnMix/wheel/methunmix-1.0.0-py3-none-any.whl
+字节数：457732
+SHA256：cf15a70e53fa3ecae2d940b90b919a0643724d38b48098d2a1532dabdda16133
+```
+
+该 URL 不是修复版。修复版 wheel 与 sdist 应按外部 release manifest 中各自不同的
+不可变 URL 和 SHA256 选择；这样也避免让 artifact 自身文档包含其最终归档摘要而
+形成自引用。
+
 ## 安装 core
 
-仅安装 owner 提供且 SHA256 与候选证据清单一致的精确 artifact；不得用该候选覆盖
-现有公开 1.0.0 URL 的字节。
+仅安装 SHA256 与 owner 审阅的 release manifest 一致的精确 artifact；不得覆盖
+现有公开 1.0.0 URL 的字节，也不能仅因 index、镜像或 pip cache 显示版本 1.0.0
+就假定取得了修复版字节。
 
 ```bash
 python3 -m venv /absolute/path/to/methunmix-fixed-1.0.0-venv
 /absolute/path/to/methunmix-fixed-1.0.0-venv/bin/python -m pip install \
-  --no-deps /absolute/path/to/fixed-candidate/methunmix-1.0.0-py3-none-any.whl
+  --no-deps /absolute/path/to/release/methunmix-1.0.0-py3-none-any.whl
 /absolute/path/to/methunmix-fixed-1.0.0-venv/bin/methunmix --version
 ```
 
-本候选只安装 `methunmix` 这一项公开命令。历史 `demethflow_core` import 路径和
+本 artifact 只安装 `methunmix` 这一项公开命令。历史 `demethflow_core` import 路径和
 `demethflow-*` schema 名仅作为内部兼容身份保留，不应作为第二个 CLI 对外说明。
 
 问题报告应保留 release manifest 中的 artifact SHA256 和安装后的

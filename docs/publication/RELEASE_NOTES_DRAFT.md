@@ -1,32 +1,30 @@
-# MethUnMix 1.0.0 release notes — fixed local candidate
+# MethUnMix 1.0.0 fixed artifact — release text
 
-Status: `NOT_RELEASED`. The distribution version is `1.0.0`, while the local
-candidate is independently identified as `fixed-1.0.0-candidate.1-20261014`;
-no tag, GitHub Release, PyPI/BioCode upload, Bioconda package, or release date
-is asserted.
+The distribution version remains `1.0.0`; exact artifact identity is recorded
+separately in the owner-reviewed release manifest. This text does not assert
+that a tag, GitHub Release, PyPI/BioCode upload, Bioconda package, or deployment
+has already occurred.
 
-## Patch contents
+## Corrections
 
 - Consume `runtime_module` and `logical_runtime_module` bindings consistently
   and revalidate selected runtime identities immediately before launch.
+- Revalidate the selected SIF byte count and SHA256 at launch time.
+- Reject unknown dependency kinds and identity drift.
 - Replace a misleading missing-dependency warning with state that reflects the
   selected, verified local binding.
-- Update version sources, citation metadata, README and English/Chinese user
-  documentation to the current immutable candidate.6 public catalog.
+- Use the immutable candidate.6 public reference catalog in English and Chinese
+  installation documentation.
 - Preserve the lightweight core boundary: no reference archive, SIF/container,
   model, cache, input data, or separately licensed algorithm implementation is
   added.
 
-## Public-state clarification
+## Same-version identity note
 
-- An older MethUnMix 1.0.0 is available as an exact direct-download wheel whose
-  size and SHA256 are documented in the README. It is not byte-identical to
-  this fixed candidate and must not be overwritten or silently replaced.
-- The candidate.6 external reference catalog has 33/33 `PUBLIC_DOWNLOADABLE`
-  selector contracts. Historical evidence covers 33 archive byte identities;
-  the candidate.6 closure repeated client fetch/import/verify for 1/33.
-- Direct URLs do not by themselves prove formal GitHub, PyPI, BioCode, or
-  Bioconda release status.
+An older MethUnMix 1.0.0 direct-download wheel remains immutable at the URL and
+SHA256 documented in the README. It is not byte-identical to the fixed artifact.
+Users must install by exact URL/file and verify SHA256; the version string alone
+cannot distinguish the two objects.
 
 ## Non-changes
 
@@ -35,6 +33,5 @@ parameters, scientific thresholds, READY/RU state, truth data, or frozen
 historical evidence. Workflow execution, output conformance, reproducibility,
 and scientific validity remain separate conclusions.
 
-Owner authorization is still required for the exact commit, artifacts, URL,
-conflict treatment, and every remote action. The fixed candidate was rebuilt
-from exact versioned source; no rc artifact was renamed.
+Owner authorization is still required for every remote action. No pre-release
+artifact is renamed to create this release.

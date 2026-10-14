@@ -1,4 +1,4 @@
-include LICENSE NOTICE README.md CITATION.cff VERSION VERSIONING_POLICY.md COMPATIBILITY_RULES.json
+include LICENSE NOTICE README.md SECURITY.md RELEASE_NOTES.md CITATION.cff VERSION VERSIONING_POLICY.md COMPATIBILITY_RULES.json
 # The development tree contains internal work-package and acceptance records.
 # Only the reviewed public-facing documents are part of a PEP 517 source
 # distribution.  Do not turn this into a broad ``recursive-include docs``:

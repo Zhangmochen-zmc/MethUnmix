@@ -1,9 +1,10 @@
-# MethUnMix user guide — 1.0.0 fixed local candidate
+# MethUnMix user guide — fixed 1.0.0 artifact
 
-> Status: **UNPUBLISHED LOCAL FIXED CANDIDATE.** This guide applies to
-> `fixed-1.0.0-candidate.1-20261014`, not to the different old 1.0.0 wheel at
-> the existing direct URL. It is not a stable-release announcement,
-> scientific-validation result, or change to READY/RU status.
+> Artifact identity is authoritative. This guide applies to the fixed 1.0.0
+> artifact named by an owner-reviewed release manifest, not to the different
+> old 1.0.0 wheel at the existing direct URL. The version string alone cannot
+> distinguish them. This guide is not a scientific-validation result or a
+> change to READY/RU status.
 
 MethUnMix is an offline-first control plane for DNA-methylation
 deconvolution.  It selects a route, checks user-provided inputs and external
@@ -11,20 +12,34 @@ assets, invokes an eligible workflow, and records provenance.  The core does
 not bundle reference archives, SIF/container images, model weights, genome
 caches, raw input data, or third-party algorithm implementations.
 
+The old same-version object is retained unchanged for provenance:
+
+```text
+https://download.cncb.ac.cn/methbank/MethUnMix/wheel/methunmix-1.0.0-py3-none-any.whl
+bytes: 457732
+sha256: cf15a70e53fa3ecae2d940b90b919a0643724d38b48098d2a1532dabdda16133
+```
+
+That URL is not the fixed artifact. The fixed wheel and sdist are selected by
+their distinct immutable URLs and SHA256 values in the external release
+manifest. This avoids a self-referential artifact whose own documentation
+would contain its final archive digest.
+
 ## Install the core
 
-Install only the exact owner-supplied candidate artifact after comparing its
-SHA256 with the candidate evidence manifest. It must not replace the bytes at
-the existing public 1.0.0 URL.
+Install only the exact release artifact after comparing its SHA256 with the
+owner-reviewed release manifest. It must not replace the bytes at the existing
+public 1.0.0 URL. Do not assume that an index, mirror, or pip cache returns the
+fixed bytes merely because it reports version `1.0.0`.
 
 ```bash
 python3 -m venv /absolute/path/to/methunmix-fixed-1.0.0-venv
 /absolute/path/to/methunmix-fixed-1.0.0-venv/bin/python -m pip install \
-  --no-deps /absolute/path/to/fixed-candidate/methunmix-1.0.0-py3-none-any.whl
+  --no-deps /absolute/path/to/release/methunmix-1.0.0-py3-none-any.whl
 /absolute/path/to/methunmix-fixed-1.0.0-venv/bin/methunmix --version
 ```
 
-`methunmix` is the only public command installed by this candidate. Historical
+`methunmix` is the only public command installed by this artifact. Historical
 `demethflow_core` import and schema names remain internal compatibility
 identities and must not be presented as a second CLI.
 

@@ -1,4 +1,4 @@
-# MethUnMix 1.0.0 — fixed local candidate
+# MethUnMix 1.0.0
 
 MethUnMix is a lightweight, offline-first control plane for DNA-methylation
 deconvolution. The core package validates inputs and external assets, explains
@@ -6,11 +6,10 @@ an execution plan, launches supported adapters, and records provenance. Large
 references, containers/SIF files, models, caches, third-party algorithms, and
 user data are deliberately not embedded in the wheel or sdist.
 
-The Python distribution version is `1.0.0`, but this source is the
-**unpublished local fixed candidate** identified independently as
-`fixed-1.0.0-candidate.1-20261014`. It is not yet a public release and does not
-change any READY/RU or scientific-validation state. A different, older
-MethUnMix 1.0.0 wheel is already available at this immutable direct URL:
+The Python distribution version is `1.0.0`. Release state and artifact identity
+must be established from the signed or owner-reviewed release manifest, not
+from the version string alone. A different, older MethUnMix 1.0.0 wheel is
+already available at this immutable direct URL:
 
 ```text
 https://download.cncb.ac.cn/methbank/MethUnMix/wheel/methunmix-1.0.0-py3-none-any.whl
@@ -18,25 +17,26 @@ bytes: 457732
 sha256: cf15a70e53fa3ecae2d940b90b919a0643724d38b48098d2a1532dabdda16133
 ```
 
-That URL identifies the old 457,732-byte wheel, not this fixed candidate. A
+That URL identifies the old 457,732-byte wheel, not the fixed release artifact. A
 direct file URL is not by itself evidence of a GitHub, PyPI, BioCode, or
 Bioconda release. A public old-1.0.0 sdist URL has not been verified. Never
-replace, rename, or silently serve this candidate at the old URL.
+replace, rename, or silently serve different bytes at the old URL.
 
-## Install the fixed local candidate
+## Install an identity-locked 1.0.0 artifact
 
-Obtain the exact wheel from the candidate owner/evidence package and verify its
-published SHA256 before installation:
+Obtain the exact wheel and its owner-reviewed release manifest, then verify the
+published SHA256 before installation. Because an older wheel has the same
+filename and version, do not rely on `pip install methunmix==1.0.0` alone:
 
 ```bash
 python3 -m venv /absolute/path/to/methunmix-fixed-1.0.0-venv
 /absolute/path/to/methunmix-fixed-1.0.0-venv/bin/python -m pip install \
-  --no-deps /absolute/path/to/fixed-candidate/methunmix-1.0.0-py3-none-any.whl
+  --no-deps /absolute/path/to/release/methunmix-1.0.0-py3-none-any.whl
 /absolute/path/to/methunmix-fixed-1.0.0-venv/bin/methunmix --version
 ```
 
 Expected version output is `MethUnMix 1.0.0`. Because both old and fixed
-artifacts report that distribution version, verify the candidate manifest
+artifacts report that distribution version, verify the release manifest
 SHA256 and installed execution-content identity as well. The sole public console entry
 is `methunmix`; `demethflow_core` remains an internal compatibility import path
 and there is no public `demethflow` executable.
@@ -116,9 +116,8 @@ such as `--random-seed` or `--workflow-timeout-seconds`.
 
 ## Patch scope
 
-Relative to the old frozen 1.0.0 bytes, this fixed candidate contains the
-accumulated engineering control-plane work through the qualified 1.0.1rc1
-baseline, including strict consumption of
+Relative to the old frozen 1.0.0 bytes, this fixed release source contains the
+qualified engineering control-plane corrections, including strict consumption of
 `runtime_module`/`logical_runtime_module`, launch-time identity revalidation,
 and correction of a misleading dependency warning. It also updates version,
 catalog, installation, and licensing documentation. It does not add algorithm

@@ -1,7 +1,7 @@
 # MethUnMix reference installation guide — catalog 1.0.0
 
 This guide applies to the external candidate.6 catalog and the unpublished
-MethUnMix fixed 1.0.0 core candidate `fixed-1.0.0-candidate.1-20261014`.
+MethUnMix fixed 1.0.0 core artifact identified by the owner-reviewed release manifest.
 It is distinct from the old public 1.0.0 wheel. Core and reference versions are independent:
 upgrading the core does not silently replace a reference, and publishing a
 reference does not change scientific status.
